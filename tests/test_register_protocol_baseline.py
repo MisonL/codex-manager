@@ -5,7 +5,20 @@ from types import SimpleNamespace
 import src.config.constants as constants_module
 import src.core.register as register_module
 from src.config.constants import OPENAI_PAGE_TYPES
-from src.core.register import PhaseResult, RegistrationEngine, SignupFormResult
+from src.core.register import (
+    PHASE_ACCOUNT_CREATE,
+    PHASE_EMAIL_PREPARE,
+    PHASE_IP_CHECK,
+    PHASE_OAUTH_CALLBACK,
+    PHASE_OAUTH_REENTER,
+    PHASE_OTP_PRIMARY,
+    PHASE_SIGNUP_PASSWORD,
+    PHASE_SIGNUP_SUBMIT,
+    PHASE_WORKSPACE_RESOLVE,
+    PhaseResult,
+    RegistrationEngine,
+    SignupFormResult,
+)
 from src.services import EmailServiceType
 
 
@@ -132,7 +145,7 @@ def test_run_propagates_full_create_account_400_payload(monkeypatch):
 
     def fake_phase_email_prepare():
         engine.email = "tester@example.com"
-        return True
+        return PhaseResult(phase=PHASE_EMAIL_PREPARE, success=True)
 
     monkeypatch.setattr(engine, "_phase_email_prepare", fake_phase_email_prepare)
     monkeypatch.setattr(engine, "_init_session", lambda: True)
@@ -142,14 +155,104 @@ def test_run_propagates_full_create_account_400_payload(monkeypatch):
     monkeypatch.setattr(engine, "_submit_signup_form", lambda did, sen_token: SignupFormResult(success=True))
     monkeypatch.setattr(engine, "_register_password", lambda: (True, "Pass12345"))
     monkeypatch.setattr(engine, "_send_verification_code", lambda: True)
-    monkeypatch.setattr(
-        engine,
-        "_phase_otp_secondary",
-        lambda ctx, started_at: ("123456", PhaseResult(phase="otp_secondary", success=True)),
-    )
-    monkeypatch.setattr(engine, "_validate_verification_code", lambda code: True)
 
     result = engine.run()
 
     assert result.success is False
     assert result.error_message == full_payload
+
+
+def test_run_jumps_to_workspace_phase_when_oauth_reenter_is_retryable(monkeypatch):
+    engine = _build_engine(monkeypatch)
+    engine.session = SimpleNamespace(
+        cookies=SimpleNamespace(get=lambda name: None),
+    )
+    calls = []
+
+    def phase_success(name, **metadata):
+        return PhaseResult(phase=name, success=True, metadata=metadata)
+
+    def phase_ip_check():
+        calls.append(PHASE_IP_CHECK)
+        return phase_success(PHASE_IP_CHECK)
+
+    def phase_email_prepare():
+        calls.append(PHASE_EMAIL_PREPARE)
+        engine.email = "tester@example.com"
+        return phase_success(PHASE_EMAIL_PREPARE)
+
+    def phase_signup_submit():
+        calls.append(PHASE_SIGNUP_SUBMIT)
+        return phase_success(PHASE_SIGNUP_SUBMIT)
+
+    def phase_signup_password():
+        calls.append(PHASE_SIGNUP_PASSWORD)
+        engine.password = "Pass12345"
+        return phase_success(PHASE_SIGNUP_PASSWORD)
+
+    def phase_otp_primary():
+        calls.append(PHASE_OTP_PRIMARY)
+        return phase_success(PHASE_OTP_PRIMARY)
+
+    def phase_account_create():
+        calls.append(PHASE_ACCOUNT_CREATE)
+        return phase_success(PHASE_ACCOUNT_CREATE)
+
+    def phase_oauth_reenter():
+        calls.append(PHASE_OAUTH_REENTER)
+        return PhaseResult(
+            phase=PHASE_OAUTH_REENTER,
+            success=False,
+            retryable=True,
+            next_action=PHASE_WORKSPACE_RESOLVE,
+            error_message="fallback to workspace",
+        )
+
+    def phase_otp_secondary():
+        calls.append("otp_secondary_should_not_run")
+        return PhaseResult(phase="otp_secondary", success=True)
+
+    def phase_workspace_resolve():
+        calls.append(PHASE_WORKSPACE_RESOLVE)
+        engine._resolved_workspace_id = "ws-123"
+        engine._callback_url = "https://callback.example.test?code=abc&state=xyz"
+        return phase_success(PHASE_WORKSPACE_RESOLVE)
+
+    def phase_oauth_callback():
+        calls.append(PHASE_OAUTH_CALLBACK)
+        engine._token_info = {
+            "account_id": "acct-1",
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "id_token": "id-token",
+        }
+        return phase_success(PHASE_OAUTH_CALLBACK)
+
+    monkeypatch.setattr(engine, "_phase_ip_check", phase_ip_check)
+    monkeypatch.setattr(engine, "_phase_email_prepare", phase_email_prepare)
+    monkeypatch.setattr(engine, "_phase_signup_submit", phase_signup_submit)
+    monkeypatch.setattr(engine, "_phase_signup_password", phase_signup_password)
+    monkeypatch.setattr(engine, "_phase_otp_primary", phase_otp_primary)
+    monkeypatch.setattr(engine, "_phase_account_create", phase_account_create)
+    monkeypatch.setattr(engine, "_phase_oauth_reenter", phase_oauth_reenter)
+    monkeypatch.setattr(engine, "_phase_otp_secondary", phase_otp_secondary)
+    monkeypatch.setattr(engine, "_phase_workspace_resolve", phase_workspace_resolve)
+    monkeypatch.setattr(engine, "_phase_oauth_callback", phase_oauth_callback)
+
+    result = engine.run()
+
+    assert result.success is True
+    assert result.workspace_id == "ws-123"
+    assert result.account_id == "acct-1"
+    assert "otp_secondary_should_not_run" not in calls
+    assert calls == [
+        PHASE_IP_CHECK,
+        PHASE_EMAIL_PREPARE,
+        PHASE_SIGNUP_SUBMIT,
+        PHASE_SIGNUP_PASSWORD,
+        PHASE_OTP_PRIMARY,
+        PHASE_ACCOUNT_CREATE,
+        PHASE_OAUTH_REENTER,
+        PHASE_WORKSPACE_RESOLVE,
+        PHASE_OAUTH_CALLBACK,
+    ]
