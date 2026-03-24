@@ -25,6 +25,7 @@ from ..database.session import get_db
 from ..config.constants import (
     OPENAI_API_ENDPOINTS,
     OPENAI_PAGE_TYPES,
+    calculate_age_from_birthdate,
     generate_random_user_info,
     OTP_CODE_PATTERN,
     DEFAULT_PASSWORD_LENGTH,
@@ -184,6 +185,7 @@ class RegistrationEngine:
         self._otp_sent_at: Optional[float] = None  # OTP 发送时间戳
         self._is_existing_account: bool = False  # 是否为已注册账号（用于自动登录）
         self.phase_history: list[PhaseResult] = []
+        self._last_create_account_error: str = ""
 
     def _log(self, message: str, level: str = "info"):
         """记录日志"""
@@ -726,8 +728,18 @@ class RegistrationEngine:
     def _create_user_account(self) -> bool:
         """创建用户账户"""
         try:
+            self._last_create_account_error = ""
             user_info = generate_random_user_info()
+            age = calculate_age_from_birthdate(user_info["birthdate"])
             self._log(f"生成用户信息: {user_info['name']}, 生日: {user_info['birthdate']}")
+
+            if age < 18:
+                self._last_create_account_error = (
+                    f"本地年龄校验失败: birthdate={user_info['birthdate']}, age={age}"
+                )
+                self._log(self._last_create_account_error, "error")
+                return False
+
             create_account_body = json.dumps(user_info)
 
             response = self.session.post(
@@ -742,13 +754,20 @@ class RegistrationEngine:
 
             self._log(f"账户创建状态: {response.status_code}")
 
+            if response.status_code == 400:
+                self._last_create_account_error = response.text
+                self._log(f"账户创建失败: {response.text}", "warning")
+                return False
+
             if response.status_code != 200:
-                self._log(f"账户创建失败: {response.text[:200]}", "warning")
+                self._last_create_account_error = f"HTTP {response.status_code}: {response.text[:200]}"
+                self._log(f"账户创建失败: {self._last_create_account_error}", "warning")
                 return False
 
             return True
 
         except Exception as e:
+            self._last_create_account_error = str(e)
             self._log(f"创建账户失败: {e}", "error")
             return False
 
@@ -1544,7 +1563,7 @@ class RegistrationEngine:
                 self._log("12. 创建用户账户...")
                 self._emit_status("account_create", "创建 OpenAI 账户资料", step_index=12)
                 if not self._create_user_account():
-                    result.error_message = "创建用户账户失败"
+                    result.error_message = self._last_create_account_error or "创建用户账户失败"
                     return result
 
             next_step = 13

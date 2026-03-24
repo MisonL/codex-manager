@@ -800,7 +800,11 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                     db, task_uuid,
                     status="failed",
                     completed_at=datetime.utcnow(),
-                    error_message=result.error_message
+                    error_message=result.error_message,
+                    result={
+                        **result.to_dict(),
+                        "email_service": active_service_type.value,
+                    }
                 )
 
                 # 更新 TaskManager 状态
