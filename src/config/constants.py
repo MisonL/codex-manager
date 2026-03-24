@@ -3,9 +3,9 @@
 """
 
 import random
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
 from enum import Enum
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 # ============================================================================
@@ -192,6 +192,9 @@ PASSWORD_CHARSET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567
 DEFAULT_PASSWORD_LENGTH = 12
 
 # 用户信息生成（用于注册）
+MINIMUM_REGISTRATION_AGE = 18
+MAXIMUM_REGISTRATION_AGE = 45
+GLOBAL_AGE_SAFETY_OFFSET_HOURS = 12
 
 # 常用英文名
 FIRST_NAMES = [
@@ -202,6 +205,37 @@ FIRST_NAMES = [
     "Grace", "Lily", "Chloe", "Zoey", "Nora", "Aria", "Hazel", "Aurora", "Stella", "Ivy"
 ]
 
+
+def _subtract_years(target_date: date, years: int) -> date:
+    """返回向前平移指定年数后的日期，自动处理闰年。"""
+    try:
+        return target_date.replace(year=target_date.year - years)
+    except ValueError:
+        return target_date.replace(year=target_date.year - years, month=2, day=28)
+
+
+def _get_worldwide_safe_today() -> date:
+    """
+    返回对全球时区都安全的“今天”。
+
+    通过回退到 UTC-12 的自然日，确保边界生日在任何时区下都不会小于 18 岁。
+    """
+    return (datetime.now(timezone.utc) - timedelta(hours=GLOBAL_AGE_SAFETY_OFFSET_HOURS)).date()
+
+
+def calculate_age_from_birthdate(
+    birthdate: str,
+    reference_date: Optional[date] = None,
+) -> int:
+    """按自然日计算年龄。"""
+    birth_date = datetime.strptime(birthdate, "%Y-%m-%d").date()
+    today = reference_date or _get_worldwide_safe_today()
+    age = today.year - birth_date.year
+    if (today.month, today.day) < (birth_date.month, birth_date.day):
+        age -= 1
+    return age
+
+
 def generate_random_user_info() -> dict:
     """
     生成随机用户信息
@@ -209,23 +243,12 @@ def generate_random_user_info() -> dict:
     Returns:
         包含 name 和 birthdate 的字典
     """
-    # 随机选择名字
     name = random.choice(FIRST_NAMES)
-
-    # 生成随机生日（18-45岁）
-    current_year = datetime.now().year
-    birth_year = random.randint(current_year - 45, current_year - 18)
-    birth_month = random.randint(1, 12)
-    # 根据月份确定天数
-    if birth_month in [1, 3, 5, 7, 8, 10, 12]:
-        birth_day = random.randint(1, 31)
-    elif birth_month in [4, 6, 9, 11]:
-        birth_day = random.randint(1, 30)
-    else:
-        # 2月，简化处理
-        birth_day = random.randint(1, 28)
-
-    birthdate = f"{birth_year}-{birth_month:02d}-{birth_day:02d}"
+    today = _get_worldwide_safe_today()
+    start_date = _subtract_years(today, MAXIMUM_REGISTRATION_AGE)
+    end_date = _subtract_years(today, MINIMUM_REGISTRATION_AGE)
+    offset_days = random.randint(0, (end_date - start_date).days)
+    birthdate = (start_date + timedelta(days=offset_days)).isoformat()
 
     return {
         "name": name,

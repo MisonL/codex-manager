@@ -1,9 +1,11 @@
 import json
+from datetime import date
 from types import SimpleNamespace
 
+import src.config.constants as constants_module
 import src.core.register as register_module
 from src.config.constants import OPENAI_PAGE_TYPES
-from src.core.register import RegistrationEngine
+from src.core.register import PhaseResult, RegistrationEngine, SignupFormResult
 from src.services import EmailServiceType
 
 
@@ -80,3 +82,74 @@ def test_register_password_uses_stable_protocol_body(monkeypatch):
             "username": "tester@example.com",
         }
     )
+
+
+def test_generate_random_user_info_samples_absolute_date_window(monkeypatch):
+    monkeypatch.setattr(constants_module, "_get_worldwide_safe_today", lambda: date(2026, 3, 23))
+    monkeypatch.setattr(constants_module.random, "choice", lambda names: "James")
+    monkeypatch.setattr(constants_module.random, "randint", lambda start, end: end)
+
+    user_info = constants_module.generate_random_user_info()
+
+    assert user_info == {
+        "name": "James",
+        "birthdate": "2008-03-23",
+    }
+    assert constants_module.calculate_age_from_birthdate(
+        user_info["birthdate"],
+        reference_date=date(2026, 3, 23),
+    ) == 18
+
+
+def test_create_user_account_stops_before_post_when_local_age_check_fails(monkeypatch):
+    engine = _build_engine(monkeypatch)
+    session = FakeSession(FakeResponse(status_code=200))
+    engine.session = session
+    monkeypatch.setattr(
+        register_module,
+        "generate_random_user_info",
+        lambda: {"name": "Teen", "birthdate": "2010-01-01"},
+    )
+    monkeypatch.setattr(register_module, "calculate_age_from_birthdate", lambda birthdate: 17)
+
+    success = engine._create_user_account()
+
+    assert success is False
+    assert session.calls == []
+    assert engine._last_create_account_error == "本地年龄校验失败: birthdate=2010-01-01, age=17"
+
+
+def test_run_propagates_full_create_account_400_payload(monkeypatch):
+    engine = _build_engine(monkeypatch)
+    full_payload = '{"error":"registration_disallowed","details":{"reason":"risk"}}'
+    engine.session = FakeSession(FakeResponse(status_code=400, text=full_payload))
+    monkeypatch.setattr(register_module, "generate_random_user_info", lambda: {
+        "name": "Adult",
+        "birthdate": "2000-02-20",
+    })
+    monkeypatch.setattr(register_module, "calculate_age_from_birthdate", lambda birthdate: 26)
+    monkeypatch.setattr(engine, "_check_ip_location", lambda: (True, "United States"))
+
+    def fake_phase_email_prepare():
+        engine.email = "tester@example.com"
+        return True
+
+    monkeypatch.setattr(engine, "_phase_email_prepare", fake_phase_email_prepare)
+    monkeypatch.setattr(engine, "_init_session", lambda: True)
+    monkeypatch.setattr(engine, "_start_oauth", lambda: True)
+    monkeypatch.setattr(engine, "_get_device_id", lambda: "did-1")
+    monkeypatch.setattr(engine, "_check_sentinel", lambda did: None)
+    monkeypatch.setattr(engine, "_submit_signup_form", lambda did, sen_token: SignupFormResult(success=True))
+    monkeypatch.setattr(engine, "_register_password", lambda: (True, "Pass12345"))
+    monkeypatch.setattr(engine, "_send_verification_code", lambda: True)
+    monkeypatch.setattr(
+        engine,
+        "_phase_otp_secondary",
+        lambda ctx, started_at: ("123456", PhaseResult(phase="otp_secondary", success=True)),
+    )
+    monkeypatch.setattr(engine, "_validate_verification_code", lambda code: True)
+
+    result = engine.run()
+
+    assert result.success is False
+    assert result.error_message == full_payload
