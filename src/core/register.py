@@ -293,6 +293,43 @@ class RegistrationEngine:
                 return phase_result
         return None
 
+    def _serialize_provider_backoff(
+        self,
+        provider_backoff: Optional[EmailProviderBackoffState],
+    ) -> Optional[Dict[str, Any]]:
+        if provider_backoff is None:
+            return None
+        return provider_backoff.to_dict()
+
+    def _serialize_phase_result(self, phase_result: PhaseResult) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "success": phase_result.success,
+        }
+        if phase_result.error_message:
+            payload["error_message"] = phase_result.error_message
+        if phase_result.error_code:
+            payload["error_code"] = phase_result.error_code
+        if phase_result.retryable:
+            payload["retryable"] = True
+        if phase_result.next_action:
+            payload["next_action"] = phase_result.next_action
+        provider_backoff = self._serialize_provider_backoff(phase_result.provider_backoff)
+        if provider_backoff is not None:
+            payload["provider_backoff"] = provider_backoff
+        if phase_result.metadata:
+            payload["metadata"] = dict(phase_result.metadata)
+        return payload
+
+    def _collect_phase_history_metadata(self) -> Dict[str, Any]:
+        if not self.phase_history:
+            return {}
+        return {
+            "phase_results": {
+                phase_result.phase: self._serialize_phase_result(phase_result)
+                for phase_result in self.phase_history
+            }
+        }
+
     def _complete_phase(
         self,
         phase: str,
@@ -337,6 +374,32 @@ class RegistrationEngine:
         )
 
     def _phase_email_prepare(self) -> PhaseResult:
+        provider_backoff = getattr(self.email_service, "provider_backoff_state", None)
+        if provider_backoff is not None and provider_backoff.is_open():
+            remaining_seconds = max(
+                0,
+                math.ceil(provider_backoff.opened_until - time.time()),
+            )
+            error_message = (
+                f"邮箱服务退避中，需等待 {remaining_seconds} 秒"
+                if not provider_backoff.last_error
+                else f"{provider_backoff.last_error} (退避剩余 {remaining_seconds} 秒)"
+            )
+            self._log(error_message, "warning")
+            return self._complete_phase(
+                PHASE_EMAIL_PREPARE,
+                success=False,
+                error_message=error_message,
+                error_code=ERROR_EMAIL_PROVIDER_RATE_LIMITED,
+                retryable=True,
+                next_action="switch_provider",
+                provider_backoff=provider_backoff,
+                metadata={
+                    "backoff_active": True,
+                    "backoff_remaining_seconds": remaining_seconds,
+                },
+            )
+
         success = self._create_email()
         provider_backoff = getattr(self.email_service, "provider_backoff_state", None)
 
@@ -1821,6 +1884,12 @@ class RegistrationEngine:
             "retryable": phase_result.retryable,
             "next_action": phase_result.next_action,
         }
+        provider_backoff = self._serialize_provider_backoff(phase_result.provider_backoff)
+        if provider_backoff is not None:
+            result.metadata["provider_backoff"] = provider_backoff
+        if phase_result.metadata:
+            result.metadata["phase_metadata"] = dict(phase_result.metadata)
+        result.metadata.update(self._collect_phase_history_metadata())
         return result
 
     def run(self) -> RegistrationResult:
@@ -1919,6 +1988,7 @@ class RegistrationEngine:
                 "is_existing_account": self._is_existing_account,
                 "registration_mode": self._resolved_execution_mode(),
             }
+            result.metadata.update(self._collect_phase_history_metadata())
 
             return result
 

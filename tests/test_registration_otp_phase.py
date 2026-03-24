@@ -1,10 +1,16 @@
 import src.core.register as register_module
 from src.core.register import (
+    ERROR_EMAIL_PROVIDER_RATE_LIMITED,
     ERROR_OTP_TIMEOUT_SECONDARY,
+    PHASE_EMAIL_PREPARE,
+    PHASE_OTP_SECONDARY,
     PhaseContext,
+    PhaseResult,
     RegistrationEngine,
+    RegistrationResult,
 )
 from src.services import EmailServiceType
+from src.services.base import EmailProviderBackoffState
 
 
 class DummySettings:
@@ -24,6 +30,18 @@ class FakeEmailService:
     def get_verification_code(self, **kwargs):
         self.calls.append(kwargs)
         return self.code
+
+
+class BackoffEmailService:
+    def __init__(self, state):
+        self.service_type = EmailServiceType.TEMPMAIL
+        self.provider_backoff_state = state
+        self.last_error = state.last_error
+        self.create_email_calls = 0
+
+    def create_email(self):
+        self.create_email_calls += 1
+        raise AssertionError("create_email should not be called while backoff is open")
 
 
 class FakeCookies:
@@ -99,6 +117,72 @@ def test_phase_otp_secondary_returns_dedicated_timeout_error_code(monkeypatch):
     assert phase_result.success is False
     assert phase_result.error_code == ERROR_OTP_TIMEOUT_SECONDARY
     assert engine.phase_history[0].error_code == ERROR_OTP_TIMEOUT_SECONDARY
+
+
+def test_phase_email_prepare_short_circuits_when_provider_backoff_is_open(monkeypatch):
+    email_service = BackoffEmailService(
+        EmailProviderBackoffState(
+            failures=2,
+            delay_seconds=60,
+            opened_until=160.0,
+            last_error="请求失败: 429",
+        )
+    )
+    engine = _build_engine(monkeypatch, email_service)
+
+    monkeypatch.setattr(register_module.time, "time", lambda: 120.0)
+
+    phase_result = engine._phase_email_prepare()
+
+    assert phase_result.success is False
+    assert phase_result.error_code == ERROR_EMAIL_PROVIDER_RATE_LIMITED
+    assert phase_result.retryable is True
+    assert phase_result.next_action == "switch_provider"
+    assert phase_result.metadata["backoff_active"] is True
+    assert phase_result.metadata["backoff_remaining_seconds"] == 40
+    assert email_service.create_email_calls == 0
+
+
+def test_build_phase_failure_result_preserves_task3_and_task4_metadata(monkeypatch):
+    email_service = FakeEmailService(code=None)
+    engine = _build_engine(monkeypatch, email_service)
+    backoff_state = EmailProviderBackoffState(
+        failures=1,
+        delay_seconds=30,
+        opened_until=130.0,
+        last_error="请求失败: 429",
+    )
+    engine.phase_history = [
+        PhaseResult(
+            phase=PHASE_EMAIL_PREPARE,
+            success=False,
+            error_message="创建邮箱失败",
+            error_code=ERROR_EMAIL_PROVIDER_RATE_LIMITED,
+            retryable=True,
+            next_action="switch_provider",
+            provider_backoff=backoff_state,
+            metadata={"backoff_active": True},
+        ),
+        PhaseResult(
+            phase=PHASE_OTP_SECONDARY,
+            success=False,
+            error_message="等待验证码超时",
+            error_code=ERROR_OTP_TIMEOUT_SECONDARY,
+            retryable=True,
+            next_action="await_email",
+            metadata={"otp_sent_at": 77.0},
+        ),
+    ]
+
+    result = engine._build_phase_failure_result(
+        RegistrationResult(success=False, logs=[]),
+        engine.phase_history[0],
+    )
+
+    assert result.metadata["provider_backoff"]["failures"] == 1
+    assert result.metadata["phase_metadata"]["backoff_active"] is True
+    assert result.metadata["phase_results"][PHASE_EMAIL_PREPARE]["provider_backoff"]["delay_seconds"] == 30
+    assert result.metadata["phase_results"][PHASE_OTP_SECONDARY]["metadata"]["otp_sent_at"] == 77.0
 
 
 def test_advance_login_authorization_sets_otp_anchor_before_password_submit(monkeypatch):
