@@ -31,11 +31,11 @@
 3. 改动范围检查
 
 ```bash
-git diff --name-only
+git status --short
 ```
 
 - 退出码: 0
-- 结果: 仅包含 `static/css/style.css`
+- 结果: 业务代码改动仅包含 `static/css/style.css`，另新增本验证记录 `docs/reviews/EXPORT-MENU-ZINDEX-VALIDATION-2026-03-25.md`
 
 ## 结论
 
