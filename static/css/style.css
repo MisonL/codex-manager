@@ -217,6 +217,13 @@ body::before {
     flex-shrink: 0;
 }
 
+.panel-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    flex-wrap: wrap;
+}
+
 .nav-link {
     text-decoration: none;
     color: var(--text-secondary);
@@ -663,6 +670,12 @@ body::before {
     transition: background-color var(--transition), color var(--transition), border-color var(--transition), transform var(--transition-spring), box-shadow var(--transition);
 }
 
+.system-badge {
+    min-width: 112px;
+    justify-content: center;
+    white-space: nowrap;
+}
+
 .status-badge::before {
     content: '';
     width: 7px;
@@ -1057,15 +1070,18 @@ form.is-locked .form-group textarea:not(:disabled) {
 .dropdown-menu {
     display: none;
     position: absolute;
+    top: calc(100% + 8px);
+    left: auto;
     right: 0;
-    top: calc(100% + 4px);
-    background: var(--surface);
+    background-color: var(--surface);
+    background-image: none;
     border: 1px solid var(--border);
     border-radius: var(--radius);
     min-width: 160px;
-    box-shadow: var(--shadow-lg);
-    z-index: 100;
+    box-shadow: 0 20px 32px -18px rgb(15 23 42 / 0.38), 0 12px 20px -18px rgb(15 23 42 / 0.24);
+    z-index: 2100;
     overflow: hidden;
+    opacity: 1;
     animation: fadeIn 0.15s ease;
 }
 
