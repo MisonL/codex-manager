@@ -197,6 +197,7 @@ class RegistrationEngine:
         self.phase_history: list[PhaseResult] = []
         self._last_create_account_error: str = ""
         self._pending_continue_url: Optional[str] = None
+        self._email_verified: bool = False
         self._resolved_workspace_id: Optional[str] = None
         self._callback_url: Optional[str] = None
         self._token_info: Optional[Dict[str, Any]] = None
@@ -1019,6 +1020,7 @@ class RegistrationEngine:
             started_at=time.time(),
             record_phase=False,
         )
+        self._email_verified = False
         if not code:
             return self._record_phase_result(wait_phase)
 
@@ -1031,13 +1033,16 @@ class RegistrationEngine:
                 metadata={"otp_sent_at": self._otp_sent_at},
             )
 
+        self._email_verified = True
         self._pending_continue_url = continue_url or None
+        self._log("验证码校验完成，Session 已进入 email_verified 状态")
         return self._complete_phase(
             PHASE_OTP_SECONDARY,
             success=True,
             metadata={
                 **wait_phase.metadata,
                 "continue_url": self._pending_continue_url,
+                "email_verified": True,
             },
         )
 
@@ -1118,6 +1123,14 @@ class RegistrationEngine:
                 PHASE_ACCOUNT_CREATE,
                 success=True,
                 metadata={"skipped": True, "is_existing_account": True},
+            )
+
+        if not self._email_verified:
+            return self._complete_phase(
+                PHASE_ACCOUNT_CREATE,
+                success=False,
+                error_message="邮箱尚未完成验证，禁止创建用户账户",
+                metadata={"email_verified": False},
             )
 
         if not self._create_user_account():
@@ -2035,9 +2048,9 @@ class RegistrationEngine:
             (PHASE_SIGNUP_SUBMIT, "提交注册表单", self._phase_signup_submit),
             (PHASE_SIGNUP_PASSWORD, "提交注册密码", self._phase_signup_password),
             (PHASE_OTP_PRIMARY, "发送或确认首轮验证码", self._phase_otp_primary),
+            (PHASE_OTP_SECONDARY, "等待并校验二次验证码", self._phase_otp_secondary),
             (PHASE_ACCOUNT_CREATE, "创建 OpenAI 账户资料", self._phase_account_create),
             (PHASE_OAUTH_REENTER, "重入 Codex OAuth 流程", self._phase_oauth_reenter),
-            (PHASE_OTP_SECONDARY, "等待并校验二次验证码", self._phase_otp_secondary),
             (PHASE_WORKSPACE_RESOLVE, "解析 Workspace 与授权回调", self._phase_workspace_resolve),
             (PHASE_OAUTH_CALLBACK, "处理 OAuth 回调", self._phase_oauth_callback),
         ]

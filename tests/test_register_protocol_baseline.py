@@ -12,6 +12,7 @@ from src.core.register import (
     PHASE_OAUTH_CALLBACK,
     PHASE_OAUTH_REENTER,
     PHASE_OTP_PRIMARY,
+    PHASE_OTP_SECONDARY,
     PHASE_SIGNUP_PASSWORD,
     PHASE_SIGNUP_SUBMIT,
     PHASE_WORKSPACE_RESOLVE,
@@ -155,11 +156,66 @@ def test_run_propagates_full_create_account_400_payload(monkeypatch):
     monkeypatch.setattr(engine, "_submit_signup_form", lambda did, sen_token: SignupFormResult(success=True))
     monkeypatch.setattr(engine, "_register_password", lambda: (True, "Pass12345"))
     monkeypatch.setattr(engine, "_send_verification_code", lambda: True)
+    monkeypatch.setattr(
+        engine,
+        "_phase_otp_secondary",
+        lambda: (
+            setattr(engine, "_email_verified", True)
+            or PhaseResult(phase=PHASE_OTP_SECONDARY, success=True)
+        ),
+    )
 
     result = engine.run()
 
     assert result.success is False
     assert result.error_message == full_payload
+
+
+def test_phase_otp_secondary_marks_email_verified_before_account_create(monkeypatch):
+    engine = _build_engine(monkeypatch)
+    engine._otp_sent_at = 77.0
+
+    monkeypatch.setattr(
+        engine,
+        "_await_secondary_otp_code",
+        lambda context, started_at, record_phase=False: (
+            "654321",
+            PhaseResult(
+                phase=PHASE_OTP_SECONDARY,
+                success=True,
+                metadata={"otp_sent_at": 77.0},
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_validate_verification_code_and_get_continue_url",
+        lambda code: (True, "https://continue.example.test"),
+    )
+
+    phase_result = engine._phase_otp_secondary()
+
+    assert phase_result.success is True
+    assert engine._email_verified is True
+    assert engine._pending_continue_url == "https://continue.example.test"
+    assert phase_result.metadata["email_verified"] is True
+
+
+def test_phase_account_create_fails_when_email_not_verified(monkeypatch):
+    engine = _build_engine(monkeypatch)
+    create_calls = []
+
+    def fake_create_user_account():
+        create_calls.append("called")
+        return True
+
+    monkeypatch.setattr(engine, "_create_user_account", fake_create_user_account)
+
+    phase_result = engine._phase_account_create()
+
+    assert phase_result.success is False
+    assert phase_result.error_message == "邮箱尚未完成验证，禁止创建用户账户"
+    assert create_calls == []
 
 
 def test_run_jumps_to_workspace_phase_when_oauth_reenter_is_retryable(monkeypatch):
@@ -209,8 +265,8 @@ def test_run_jumps_to_workspace_phase_when_oauth_reenter_is_retryable(monkeypatc
         )
 
     def phase_otp_secondary():
-        calls.append("otp_secondary_should_not_run")
-        return PhaseResult(phase="otp_secondary", success=True)
+        calls.append(PHASE_OTP_SECONDARY)
+        return PhaseResult(phase=PHASE_OTP_SECONDARY, success=True)
 
     def phase_workspace_resolve():
         calls.append(PHASE_WORKSPACE_RESOLVE)
@@ -244,13 +300,13 @@ def test_run_jumps_to_workspace_phase_when_oauth_reenter_is_retryable(monkeypatc
     assert result.success is True
     assert result.workspace_id == "ws-123"
     assert result.account_id == "acct-1"
-    assert "otp_secondary_should_not_run" not in calls
     assert calls == [
         PHASE_IP_CHECK,
         PHASE_EMAIL_PREPARE,
         PHASE_SIGNUP_SUBMIT,
         PHASE_SIGNUP_PASSWORD,
         PHASE_OTP_PRIMARY,
+        PHASE_OTP_SECONDARY,
         PHASE_ACCOUNT_CREATE,
         PHASE_OAUTH_REENTER,
         PHASE_WORKSPACE_RESOLVE,
