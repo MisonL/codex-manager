@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ...config.settings import get_settings, update_settings
+from ...core.fingerprint import DEFAULT_BROWSER_IMPERSONATE
 from ...database import crud
 from ...database.session import get_db
 
@@ -185,7 +186,7 @@ async def test_dynamic_proxy(request: DynamicProxySettings):
             "https://api.ipify.org?format=json",
             proxies=proxies,
             timeout=10,
-            impersonate="chrome110"
+            impersonate=DEFAULT_BROWSER_IMPERSONATE
         )
         elapsed = round((time.time() - start) * 1000)
         if resp.status_code == 200:
@@ -633,7 +634,7 @@ async def test_proxy_item(proxy_id: int):
                 test_url,
                 proxies=proxies,
                 timeout=3,
-                impersonate="chrome110"
+                impersonate=DEFAULT_BROWSER_IMPERSONATE
             )
 
             elapsed_time = time.time() - start_time
@@ -684,7 +685,7 @@ async def test_all_proxies():
                     test_url,
                     proxies=proxies_dict,
                     timeout=3,
-                    impersonate="chrome110"
+                    impersonate=DEFAULT_BROWSER_IMPERSONATE
                 )
 
                 elapsed_time = time.time() - start_time

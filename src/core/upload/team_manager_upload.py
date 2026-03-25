@@ -10,6 +10,7 @@ from curl_cffi import requests as cffi_requests
 
 from ...database.models import Account
 from ...database.session import get_db
+from ..fingerprint import DEFAULT_BROWSER_IMPERSONATE
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +136,7 @@ def batch_upload_to_team_manager(
                 json=payload,
                 proxies=None,
                 timeout=60,
-                impersonate="chrome110",
+                impersonate=DEFAULT_BROWSER_IMPERSONATE,
             )
             if resp.status_code in (200, 201):
                 for account in valid_accounts:
@@ -189,7 +190,7 @@ def test_team_manager_connection(api_url: str, api_key: str) -> Tuple[bool, str]
             headers=headers,
             proxies=None,
             timeout=10,
-            impersonate="chrome110",
+            impersonate=DEFAULT_BROWSER_IMPERSONATE,
         )
         if resp.status_code in (200, 204, 401, 403, 405):
             if resp.status_code == 401:

@@ -16,6 +16,7 @@ from ...config.settings import get_settings
 from ...database.session import get_db
 from ...database import crud
 from ...database.models import Account
+from ..fingerprint import get_fingerprint_profile
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +52,22 @@ class TokenRefreshManager:
         """
         self.proxy_url = proxy_url
         self.settings = get_settings()
+        self.profile = get_fingerprint_profile(proxy_url)
 
     def _create_session(self) -> cffi_requests.Session:
         """创建 HTTP 会话"""
-        session = cffi_requests.Session(impersonate="chrome120", proxy=self.proxy_url)
+        session = cffi_requests.Session(
+            proxy=self.proxy_url,
+            **self.profile.session_kwargs(timeout=30),
+        )
         return session
+
+    def _api_headers(self, url: str, headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+        return self.profile.build_headers(
+            url=url,
+            request_kind="api",
+            headers=headers,
+        )
 
     def _parse_oauth_error(self, response: cffi_requests.Response) -> str:
         """解析 OAuth 错误信息"""
@@ -112,10 +124,12 @@ class TokenRefreshManager:
             # 请求会话端点
             response = session.get(
                 self.SESSION_URL,
-                headers={
-                    "accept": "application/json",
-                    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                },
+                headers=self._api_headers(
+                    self.SESSION_URL,
+                    {
+                        "accept": "application/json",
+                    },
+                ),
                 timeout=30
             )
 
@@ -187,10 +201,13 @@ class TokenRefreshManager:
 
             response = session.post(
                 self.TOKEN_URL,
-                headers={
-                    "content-type": "application/x-www-form-urlencoded",
-                    "accept": "application/json"
-                },
+                headers=self._api_headers(
+                    self.TOKEN_URL,
+                    {
+                        "content-type": "application/x-www-form-urlencoded",
+                        "accept": "application/json",
+                    },
+                ),
                 data=token_data,
                 timeout=30
             )
@@ -281,10 +298,13 @@ class TokenRefreshManager:
             # 调用 OpenAI API 验证 token
             response = session.get(
                 "https://chatgpt.com/backend-api/me",
-                headers={
-                    "authorization": f"Bearer {access_token}",
-                    "accept": "application/json"
-                },
+                headers=self._api_headers(
+                    "https://chatgpt.com/backend-api/me",
+                    {
+                        "authorization": f"Bearer {access_token}",
+                        "accept": "application/json",
+                    },
+                ),
                 timeout=30
             )
 

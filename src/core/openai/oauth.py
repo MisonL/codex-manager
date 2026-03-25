@@ -21,6 +21,7 @@ from ...config.constants import (
     OAUTH_REDIRECT_URI,
     OAUTH_SCOPE,
 )
+from ..fingerprint import get_fingerprint_profile
 
 
 def _b64url_no_pad(raw: bytes) -> str:
@@ -148,11 +149,10 @@ def _post_form(
             "https": proxy_url,
         }
 
+    profile = get_fingerprint_profile(proxy_url)
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     }
 
     try:
@@ -160,10 +160,16 @@ def _post_form(
         response = cffi_requests.post(
             url,
             data=data,
-            headers=headers,
+            headers=profile.build_headers(
+                url=url,
+                request_kind="api",
+                headers=headers,
+            ),
             timeout=timeout,
             proxies=proxies,
-            impersonate="chrome"
+            impersonate=profile.impersonate,
+            extra_fp=profile.extra_fp(),
+            default_headers=False,
         )
 
         if response.status_code != 200:

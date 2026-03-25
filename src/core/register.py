@@ -17,6 +17,7 @@ from datetime import datetime
 from curl_cffi import requests as cffi_requests
 
 from .openai.oauth import OAuthManager, OAuthStart
+from .fingerprint import FingerprintProfile
 from .http_client import OpenAIHTTPClient, HTTPClientError
 from ..services import EmailServiceFactory, BaseEmailService, EmailServiceType
 from ..services.base import EmailProviderBackoffState
@@ -169,6 +170,7 @@ class RegistrationEngine:
 
         # 创建 HTTP 客户端
         self.http_client = OpenAIHTTPClient(proxy_url=proxy_url)
+        self.fingerprint_profile: FingerprintProfile = self.http_client.fingerprint_profile
 
         # 创建 OAuth 管理器
         settings = get_settings()
@@ -250,16 +252,98 @@ class RegistrationEngine:
             logger.warning(f"上报任务阶段状态失败: {e}")
 
     def _current_device_id(self) -> Optional[str]:
-        """优先复用现有 Device ID，避免重复触发慢请求。"""
-        if self.device_id:
-            return self.device_id
-        if not self.session:
+        """优先以当前 Cookie 为准，避免盲复用内存中的旧 Device ID。"""
+        did = self._sync_device_id_from_session(clear_when_missing=False)
+        if did:
+            return did
+        if self.session:
             return None
+        return self.device_id
 
-        did = self.session.cookies.get("oai-did")
+    def _sync_device_id_from_session(self, *, clear_when_missing: bool) -> Optional[str]:
+        if not self.session:
+            return self.device_id
+
+        did = str(self.session.cookies.get("oai-did") or "").strip()
         if did:
             self.device_id = did
-        return did
+            return did
+
+        if clear_when_missing:
+            self.device_id = None
+        return None
+
+    def _session_get(
+        self,
+        url: str,
+        *,
+        request_kind: str,
+        headers: Optional[Dict[str, str]] = None,
+        **kwargs,
+    ):
+        if not self.session:
+            raise RuntimeError("session not initialized")
+
+        request_kwargs = dict(kwargs)
+        request_kwargs.update(
+            self.fingerprint_profile.request_kwargs(
+                url=url,
+                request_kind=request_kind,
+                headers=headers,
+            )
+        )
+        return self.session.get(url, **request_kwargs)
+
+    def _session_post(
+        self,
+        url: str,
+        *,
+        request_kind: str,
+        headers: Optional[Dict[str, str]] = None,
+        **kwargs,
+    ):
+        if not self.session:
+            raise RuntimeError("session not initialized")
+
+        request_kwargs = dict(kwargs)
+        request_kwargs.update(
+            self.fingerprint_profile.request_kwargs(
+                url=url,
+                request_kind=request_kind,
+                headers=headers,
+            )
+        )
+        return self.session.post(url, **request_kwargs)
+
+    def _rebuild_session(self, reason: str) -> None:
+        self._log(f"重建 HTTP 会话: {reason}", "warning")
+        self.http_client.close()
+        self.session = self.http_client.session
+        self.fingerprint_profile = self.http_client.fingerprint_profile
+        self._sync_device_id_from_session(clear_when_missing=True)
+
+    def _probe_device_id_validity(self, stage: str) -> bool:
+        if not self.oauth_start:
+            return False
+
+        try:
+            self._emit_status("device_id_probe", f"{stage} 前探测 Device ID 有效性")
+            started_at = time.time()
+            response = self._session_get(
+                self.oauth_start.auth_url,
+                request_kind="navigate",
+                timeout=15,
+            )
+            self._log_timed_http_result(f"{stage} Device ID 探测", started_at, response)
+            refreshed = self._sync_device_id_from_session(clear_when_missing=True)
+            if refreshed:
+                self._log(f"{stage} Device ID 有效: {refreshed}")
+                return True
+            self._log(f"{stage} Device ID 探测失败: 当前 Cookie 未携带 oai-did", "warning")
+            return False
+        except Exception as e:
+            self._log(f"{stage} Device ID 探测失败: {e}", "warning")
+            return False
 
     def _log_timed_http_result(
         self,
@@ -557,6 +641,8 @@ class RegistrationEngine:
         """初始化会话"""
         try:
             self.session = self.http_client.session
+            self.fingerprint_profile = self.http_client.fingerprint_profile
+            self._sync_device_id_from_session(clear_when_missing=True)
             return True
         except Exception as e:
             self._log(f"初始化会话失败: {e}", "error")
@@ -584,15 +670,18 @@ class RegistrationEngine:
             except Exception as e:
                 self._log(f"关闭邮箱服务失败: {e}", "warning")
 
-    def _get_device_id(self) -> Optional[str]:
+    def _get_device_id(self, force_refresh: bool = False) -> Optional[str]:
         """获取 Device ID"""
         if not self.oauth_start:
             return None
 
-        cached_did = self._current_device_id()
+        cached_did = None if force_refresh else self._current_device_id()
         if cached_did:
             self._log(f"复用已有 Device ID: {cached_did}")
             return cached_did
+
+        if force_refresh:
+            self._sync_device_id_from_session(clear_when_missing=True)
 
         max_attempts = 3
         for attempt in range(1, max_attempts + 1):
@@ -607,15 +696,15 @@ class RegistrationEngine:
                     max_attempts=max_attempts,
                 )
                 started_at = time.time()
-                response = self.session.get(
+                response = self._session_get(
                     self.oauth_start.auth_url,
+                    request_kind="navigate",
                     timeout=20
                 )
                 self._log_timed_http_result("获取 Device ID 请求", started_at, response)
-                did = self.session.cookies.get("oai-did")
+                did = self._sync_device_id_from_session(clear_when_missing=True)
 
                 if did:
-                    self.device_id = did
                     self._log(f"Device ID: {did}")
                     return did
 
@@ -631,8 +720,7 @@ class RegistrationEngine:
 
             if attempt < max_attempts:
                 time.sleep(attempt)
-                self.http_client.close()
-                self.session = self.http_client.session
+                self._rebuild_session(f"Device ID 获取重试 {attempt}/{max_attempts}")
 
         return None
 
@@ -650,11 +738,15 @@ class RegistrationEngine:
             started_at = time.time()
             response = self.http_client.post(
                 OPENAI_API_ENDPOINTS["sentinel"],
-                headers={
-                    "origin": "https://sentinel.openai.com",
-                    "referer": "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=20260219f9f6",
-                    "content-type": "text/plain;charset=UTF-8",
-                },
+                headers=self.fingerprint_profile.build_headers(
+                    url=OPENAI_API_ENDPOINTS["sentinel"],
+                    request_kind="api",
+                    headers={
+                        "origin": "https://sentinel.openai.com",
+                        "referer": "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=20260219f9f6",
+                        "content-type": "text/plain;charset=UTF-8",
+                    },
+                ),
                 data=sen_req_body,
             )
             self._log_timed_http_result("Sentinel 校验", started_at, response)
@@ -691,8 +783,9 @@ class RegistrationEngine:
                 sentinel = f'{{"p": "", "t": "", "c": "{sen_token}", "id": "{did}", "flow": "authorize_continue"}}'
                 headers["openai-sentinel-token"] = sentinel
 
-            response = self.session.post(
+            response = self._session_post(
                 OPENAI_API_ENDPOINTS["signup"],
+                request_kind="api",
                 headers=headers,
                 data=signup_body,
             )
@@ -748,8 +841,9 @@ class RegistrationEngine:
                 "username": self.email
             })
 
-            response = self.session.post(
+            response = self._session_post(
                 OPENAI_API_ENDPOINTS["register"],
+                request_kind="api",
                 headers={
                     "referer": "https://auth.openai.com/create-account/password",
                     "accept": "application/json",
@@ -816,8 +910,9 @@ class RegistrationEngine:
             # 记录发送时间戳
             self._otp_sent_at = time.time()
 
-            response = self.session.get(
+            response = self._session_get(
                 OPENAI_API_ENDPOINTS["send_otp"],
+                request_kind="api",
                 headers={
                     "referer": referer,
                     "accept": "application/json",
@@ -973,8 +1068,9 @@ class RegistrationEngine:
         try:
             code_body = f'{{"code":"{code}"}}'
 
-            response = self.session.post(
+            response = self._session_post(
                 OPENAI_API_ENDPOINTS["validate_otp"],
+                request_kind="api",
                 headers={
                     "referer": "https://auth.openai.com/email-verification",
                     "accept": "application/json",
@@ -1007,8 +1103,9 @@ class RegistrationEngine:
 
             create_account_body = json.dumps(user_info)
 
-            response = self.session.post(
+            response = self._session_post(
                 OPENAI_API_ENDPOINTS["create_account"],
+                request_kind="api",
                 headers={
                     "referer": "https://auth.openai.com/about-you",
                     "accept": "application/json",
@@ -1271,8 +1368,9 @@ class RegistrationEngine:
         try:
             select_body = f'{{"workspace_id":"{workspace_id}"}}'
 
-            response = self.session.post(
+            response = self._session_post(
                 OPENAI_API_ENDPOINTS["select_workspace"],
+                request_kind="api",
                 headers={
                     "referer": "https://auth.openai.com/sign-in-with-chatgpt/codex/consent",
                     "content-type": "application/json",
@@ -1353,8 +1451,9 @@ class RegistrationEngine:
             sen_token = self._check_sentinel(did) if did else None
             self._log("登录重入：请求 authorize 页面以确认当前表单状态")
             started_at = time.time()
-            response = self.session.get(
+            response = self._session_get(
                 self.oauth_start.auth_url,
+                request_kind="navigate",
                 timeout=15,
             )
             self._log_timed_http_result("登录重入 authorize 页面", started_at, response)
@@ -1374,8 +1473,9 @@ class RegistrationEngine:
                 self._emit_status("login_reentry", "提交邮箱以推进到密码页")
                 self._log("登录重入：提交邮箱到 authorize/continue")
                 started_at = time.time()
-                login_response = self.session.post(
+                login_response = self._session_post(
                     "https://auth.openai.com/api/accounts/authorize/continue",
+                    request_kind="api",
                     headers={
                         "referer": "https://auth.openai.com/log-in",
                         "accept": "application/json",
@@ -1411,7 +1511,7 @@ class RegistrationEngine:
                     try:
                         self._emit_status("login_reentry", "跟进登录 continue_url")
                         started_at = time.time()
-                        self.session.get(continue_url, timeout=15)
+                        self._session_get(continue_url, request_kind="navigate", timeout=15)
                         self._log_timed_http_result("登录重入 continue_url", started_at)
                     except Exception:
                         pass
@@ -1435,8 +1535,9 @@ class RegistrationEngine:
             did = self._current_device_id()
             sen_token = self._check_sentinel(did) if did else None
             started_at = time.time()
-            response = self.session.post(
+            response = self._session_post(
                 "https://auth.openai.com/api/accounts/password/verify",
+                request_kind="api",
                 headers={
                     "referer": "https://auth.openai.com/log-in/password",
                     "accept": "application/json",
@@ -1474,7 +1575,7 @@ class RegistrationEngine:
                     try:
                         self._emit_status("login_password", "跟进密码校验 continue_url")
                         started_at = time.time()
-                        self.session.get(continue_url, timeout=15)
+                        self._session_get(continue_url, request_kind="navigate", timeout=15)
                         self._log_timed_http_result("密码校验 continue_url", started_at)
                     except Exception:
                         pass
@@ -1490,8 +1591,9 @@ class RegistrationEngine:
         try:
             did = self._current_device_id()
             sen_token = self._check_sentinel(did) if did else None
-            response = self.session.post(
+            response = self._session_post(
                 "https://auth.openai.com/api/accounts/password/verify",
+                request_kind="api",
                 headers={
                     "referer": "https://auth.openai.com/log-in/password",
                     "accept": "application/json",
@@ -1528,7 +1630,7 @@ class RegistrationEngine:
             continue_url = str(payload.get("continue_url") or "").strip() or None
             if continue_url:
                 try:
-                    self.session.get(continue_url, timeout=15)
+                    self._session_get(continue_url, request_kind="navigate", timeout=15)
                 except Exception:
                     pass
             return True, continue_url
@@ -1540,8 +1642,9 @@ class RegistrationEngine:
         try:
             code_body = f'{{"code":"{code}"}}'
 
-            response = self.session.post(
+            response = self._session_post(
                 OPENAI_API_ENDPOINTS["validate_otp"],
+                request_kind="api",
                 headers={
                     "referer": "https://auth.openai.com/email-verification",
                     "accept": "application/json",
@@ -1577,7 +1680,13 @@ class RegistrationEngine:
             self._log("重新开始 OAuth 登录流程失败", "warning")
             return None, None
 
-        if not self._get_device_id():
+        if self._probe_device_id_validity("advance_login_authorization"):
+            did = self._current_device_id()
+        else:
+            self._rebuild_session("advance_login_authorization Device ID 探测失败")
+            did = self._get_device_id(force_refresh=True)
+
+        if not did:
             self._log("重新登录流程获取 Device ID 失败", "warning")
             return None, None
 
@@ -1605,7 +1714,11 @@ class RegistrationEngine:
         self._emit_status("workspace_extract", "请求 consent 页面并提取 Workspace ID")
         self._log(f"请求 consent 页面: {auth_target[:120]}...")
         started_at = time.time()
-        auth_response = self.session.get(auth_target, timeout=20)
+        auth_response = self._session_get(
+            auth_target,
+            request_kind="navigate",
+            timeout=20,
+        )
         self._log_timed_http_result("获取 consent 页面", started_at, auth_response)
         current_url = str(getattr(auth_response, "url", "") or "")
         html = auth_response.text or ""
@@ -1658,7 +1771,13 @@ class RegistrationEngine:
                 next_action=PHASE_WORKSPACE_RESOLVE,
             )
 
-        if not self._get_device_id():
+        if self._probe_device_id_validity(PHASE_OAUTH_REENTER):
+            did = self._current_device_id()
+        else:
+            self._rebuild_session("oauth_reenter Device ID 探测失败")
+            did = self._get_device_id(force_refresh=True)
+
+        if not did:
             self._log("重新登录流程获取 Device ID 失败", "warning")
             return self._complete_phase(
                 PHASE_OAUTH_REENTER,
@@ -1705,7 +1824,11 @@ class RegistrationEngine:
             self._log(f"请求 consent 页面: {consent_target[:120]}...")
             try:
                 started_at = time.time()
-                auth_response = self.session.get(consent_target, timeout=20)
+                auth_response = self._session_get(
+                    consent_target,
+                    request_kind="navigate",
+                    timeout=20,
+                )
                 self._log_timed_http_result("获取 consent 页面", started_at, auth_response)
                 current_url = str(getattr(auth_response, "url", "") or "")
                 html = auth_response.text or ""
@@ -1803,8 +1926,9 @@ class RegistrationEngine:
                 self._log(f"重定向 {i+1}/{max_redirects}: {current_url[:100]}...")
 
                 started_at = time.time()
-                response = self.session.get(
+                response = self._session_get(
                     current_url,
+                    request_kind="navigate",
                     allow_redirects=False,
                     timeout=15
                 )
