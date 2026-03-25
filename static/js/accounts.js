@@ -296,6 +296,19 @@ async function loadAccounts() {
 }
 
 // 渲染账号列表
+function buildAccountMoreMenu(account) {
+    const menuItems = [
+        { label: '刷新 Token', action: `refreshToken(${account.id})` },
+        { label: '上传', action: `uploadAccount(${account.id})` },
+        { label: '标记订阅', action: `markSubscription(${account.id})` },
+        { label: '收件箱校验', action: `checkInboxCode(${account.id})` },
+    ];
+
+    return menuItems.map(item => `
+        <a href="#" class="dropdown-item" onclick="closeMoreMenu(event, this);${item.action}">${item.label}</a>
+    `).join('');
+}
+
 function renderAccounts(accounts) {
     if (accounts.length === 0) {
         elements.table.innerHTML = `
@@ -362,11 +375,8 @@ function renderAccounts(accounts) {
                     <button class="btn btn-secondary btn-sm" onclick="viewAccount(${account.id})">详情</button>
                     <div class="dropdown" style="position:relative;">
                         <button class="btn btn-secondary btn-sm" onclick="toggleMoreMenu(event, this)">更多</button>
-                        <div class="dropdown-menu" style="min-width:100px;">
-                            <a href="#" class="dropdown-item" onclick="closeMoreMenu(event, this);refreshToken(${account.id})">${accountActionLabels.refreshToken}</a>
-                            <a href="#" class="dropdown-item" onclick="closeMoreMenu(event, this);uploadAccount(${account.id})">上传</a>
-                            <a href="#" class="dropdown-item" onclick="closeMoreMenu(event, this);markSubscription(${account.id})">标记</a>
-                            <a href="#" class="dropdown-item" onclick="closeMoreMenu(event, this);checkInboxCode(${account.id})">收件箱</a>
+                        <div class="dropdown-menu" style="min-width:132px;">
+                            ${buildAccountMoreMenu(account)}
                         </div>
                     </div>
                     <button class="btn btn-danger btn-sm" onclick="deleteAccount(${account.id}, '${escapeHtml(account.email)}')">删除</button>
@@ -519,6 +529,7 @@ function updateBatchButtons() {
     const codexAuthBtn = document.getElementById('codex-auth-login-btn');
     if (codexAuthBtn) {
         codexAuthBtn.disabled = count === 0;
+        codexAuthBtn.textContent = count > 0 ? `Codex Auth (${count})` : 'Codex Auth';
     }
 
     elements.batchDeleteBtn.textContent = count > 0 ? `删除 (${count})` : '批量删除';

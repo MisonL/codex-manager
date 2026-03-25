@@ -825,6 +825,7 @@ form.is-locked .form-group textarea:not(:disabled) {
 .table-container {
     position: relative;
     overflow-x: auto;
+    overflow-y: visible;
     border-radius: var(--radius);
     z-index: 0;
 }
@@ -1098,6 +1099,7 @@ form.is-locked .form-group textarea:not(:disabled) {
     overflow: hidden;
     opacity: 1;
     animation: fadeIn 0.15s ease;
+    transform-origin: top right;
 }
 
 .dropdown-menu.active {
@@ -1401,6 +1403,12 @@ form.is-locked .form-group textarea:not(:disabled) {
 @media (max-width: 1024px) {
     .stats-grid {
         grid-template-columns: repeat(2, 1fr);
+    }
+
+    .table-container {
+        overflow-x: auto;
+        overflow-y: visible;
+        -webkit-overflow-scrolling: touch;
     }
 }
 
