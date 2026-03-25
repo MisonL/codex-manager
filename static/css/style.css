@@ -67,7 +67,8 @@
 
     /* 导航控件 */
     --nav-control-size: 36px;
-    --nav-meta-safe-space: 12px;
+    --nav-meta-safe-space: clamp(16px, 2vw, 24px);
+    --navbar-background: #ffffff;
 }
 
 /* 暗色主题 */
@@ -97,6 +98,7 @@
     --text-primary: #f1f5f9;
     --text-secondary: #94a3b8;
     --text-muted: #64748b;
+    --navbar-background: #111827;
 
     --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
     --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.4), 0 1px 2px -1px rgb(0 0 0 / 0.4);
@@ -153,17 +155,24 @@ body::before {
    ============================================ */
 
 .navbar {
+    position: sticky;
+    top: 0;
+    z-index: 2000;
+    width: 100%;
+    margin-bottom: var(--spacing-xl);
+    background-color: var(--navbar-background);
+    border-bottom: 1px solid var(--border);
+    box-shadow: var(--shadow-sm);
+    isolation: isolate;
+}
+
+.navbar-shell {
     display: flex;
     justify-content: space-between;
     align-items: center;
     padding: var(--spacing-lg) 0;
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    margin-bottom: var(--spacing-xl);
-    position: sticky;
-    top: 0;
-    z-index: 100;
-    backdrop-filter: blur(8px);
+    gap: var(--spacing-lg);
+    background-color: inherit;
 }
 
 .nav-brand h1 {
@@ -204,7 +213,7 @@ body::before {
     justify-content: flex-end;
     gap: var(--spacing-sm);
     min-height: var(--nav-control-size);
-    padding-right: var(--nav-meta-safe-space);
+    padding-right: calc(var(--nav-meta-safe-space) + env(safe-area-inset-right, 0px));
     flex-shrink: 0;
 }
 
@@ -1348,7 +1357,7 @@ form.is-locked .form-group textarea:not(:disabled) {
         padding: 0 var(--spacing-md);
     }
 
-    .navbar {
+    .navbar-shell {
         flex-direction: column;
         gap: var(--spacing-md);
         padding: var(--spacing-md) 0;
@@ -1357,12 +1366,12 @@ form.is-locked .form-group textarea:not(:disabled) {
     .nav-links {
         width: 100%;
         justify-content: center;
+        flex-wrap: wrap;
     }
 
     .nav-meta {
         width: 100%;
-        justify-content: center;
-        padding-right: 0;
+        justify-content: flex-end;
     }
 
     .toolbar {
