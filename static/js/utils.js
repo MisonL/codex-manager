@@ -88,7 +88,7 @@ class ThemeManager {
     }
 
     loadTheme() {
-        return localStorage.getItem('theme') || 'light';
+        return localStorage.getItem('theme') === 'dark' ? 'dark' : 'light';
     }
 
     saveTheme(theme) {
@@ -107,16 +107,34 @@ class ThemeManager {
     }
 
     setTheme(theme) {
-        this.theme = theme;
-        this.saveTheme(theme);
+        this.theme = theme === 'dark' ? 'dark' : 'light';
+        this.saveTheme(this.theme);
         this.applyTheme();
     }
 
+    getToggleButtonState() {
+        if (this.theme === 'dark') {
+            return {
+                icon: String.fromCodePoint(0x2600, 0xFE0F),
+                title: '切换到亮色模式',
+            };
+        }
+
+        return {
+            icon: String.fromCodePoint(0x1F319),
+            title: '切换到暗色模式',
+        };
+    }
+
     updateToggleButtons() {
+        const { icon, title } = this.getToggleButtonState();
         const buttons = document.querySelectorAll('.theme-toggle');
         buttons.forEach(btn => {
-            btn.innerHTML = this.theme === 'light' ? '🌙' : '☀️';
-            btn.title = this.theme === 'light' ? '切换到暗色模式' : '切换到亮色模式';
+            btn.textContent = icon;
+            btn.title = title;
+            if (typeof btn.setAttribute === 'function') {
+                btn.setAttribute('aria-label', title);
+            }
         });
     }
 }
