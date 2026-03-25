@@ -1062,10 +1062,10 @@ function showSettingsMenuPositionError(message) {
 function resetSettingsMoreMenuPosition(menu, dropdown = menu?.closest('.dropdown')) {
     if (dropdown) {
         dropdown.classList.remove('dropup', 'dropdown-overlay');
-        dropdown.style.removeProperty('--dropdown-anchor-top');
-        dropdown.style.removeProperty('--dropdown-anchor-left');
-        dropdown.style.removeProperty('--dropdown-trigger-width');
     }
+    menu.style.removeProperty('top');
+    menu.style.removeProperty('left');
+    menu.style.removeProperty('visibility');
 }
 
 function closeActiveSettingsMoreMenus(exceptMenu = null) {
@@ -1133,8 +1133,14 @@ function toggleSettingsMoreMenu(event, btn) {
     }
 
     closeActiveSettingsMoreMenus(menu);
+    menu.style.visibility = 'hidden';
     menu.classList.add('active');
-    positionSettingsMoreMenu(btn, menu);
+    const positioned = positionSettingsMoreMenu(btn, menu);
+    requestAnimationFrame(() => {
+        if (menu.classList.contains('active') && positioned !== false) {
+            menu.style.visibility = 'visible';
+        }
+    });
 }
 
 function closeSettingsMoreMenu(event, el) {

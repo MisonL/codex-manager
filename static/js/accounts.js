@@ -1398,10 +1398,10 @@ function showMoreMenuPositionError(message) {
 function resetMoreMenuPosition(menu, dropdown = menu?.closest('.dropdown')) {
     if (dropdown) {
         dropdown.classList.remove('dropup', 'dropdown-overlay');
-        dropdown.style.removeProperty('--dropdown-anchor-top');
-        dropdown.style.removeProperty('--dropdown-anchor-left');
-        dropdown.style.removeProperty('--dropdown-trigger-width');
     }
+    menu.style.removeProperty('top');
+    menu.style.removeProperty('left');
+    menu.style.removeProperty('visibility');
 }
 
 function closeActiveMoreMenus(exceptMenu = null) {
@@ -1470,8 +1470,14 @@ function toggleMoreMenu(event, btn) {
     }
 
     closeActiveMoreMenus(menu);
+    menu.style.visibility = 'hidden';
     menu.classList.add('active');
-    positionMoreMenu(btn, menu);
+    const positioned = positionMoreMenu(btn, menu);
+    requestAnimationFrame(() => {
+        if (menu.classList.contains('active') && positioned !== false) {
+            menu.style.visibility = 'visible';
+        }
+    });
 }
 
 function closeMoreMenu(event, el) {

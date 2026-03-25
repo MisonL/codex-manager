@@ -1114,11 +1114,10 @@ form.is-locked .form-group textarea:not(:disabled) {
 
 .dropdown.dropdown-overlay .dropdown-menu {
     position: fixed;
-    top: var(--dropdown-anchor-top, 0px);
-    left: var(--dropdown-anchor-left, 0px);
+    top: -9999px;
+    left: -9999px;
     right: auto;
     bottom: auto;
-    min-width: max(var(--dropdown-trigger-width, 0px), 120px);
     z-index: 320;
     box-shadow: 0 18px 40px rgb(15 23 42 / 0.18);
 }
