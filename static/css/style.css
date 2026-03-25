@@ -64,6 +64,10 @@
     --spacing-md: 16px;
     --spacing-lg: 24px;
     --spacing-xl: 32px;
+
+    /* 导航控件 */
+    --nav-control-size: 36px;
+    --nav-meta-safe-space: 12px;
 }
 
 /* 暗色主题 */
@@ -197,7 +201,10 @@ body::before {
 .nav-meta {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     gap: var(--spacing-sm);
+    min-height: var(--nav-control-size);
+    padding-right: var(--nav-meta-safe-space);
     flex-shrink: 0;
 }
 
@@ -225,21 +232,34 @@ body::before {
 
 /* 主题切换按钮 */
 .theme-toggle {
-    background: var(--surface);
-    border: 1px solid var(--border);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--nav-control-size);
+    height: var(--nav-control-size);
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
     border-radius: var(--radius);
-    padding: var(--spacing-sm);
     cursor: pointer;
     color: var(--text-secondary);
-    transition: color var(--transition), background-color var(--transition), border-color var(--transition), transform var(--transition-spring), box-shadow var(--transition);
+    line-height: 1;
+    appearance: none;
+    box-shadow: none;
+    flex-shrink: 0;
+    transition: color var(--transition), background-color var(--transition), border-color var(--transition);
     margin-left: 0;
 }
 
 .theme-toggle:hover {
     color: var(--text-primary);
-    background: var(--surface-hover);
-    transform: translateY(-1px) scale(1.02);
-    box-shadow: var(--shadow-sm);
+    background: var(--border-light);
+    border-color: var(--border);
+}
+
+.theme-toggle:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
 }
 
 /* ============================================
@@ -1342,6 +1362,7 @@ form.is-locked .form-group textarea:not(:disabled) {
     .nav-meta {
         width: 100%;
         justify-content: center;
+        padding-right: 0;
     }
 
     .toolbar {
