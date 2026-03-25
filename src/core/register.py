@@ -45,13 +45,14 @@ PHASE_EMAIL_PREPARE = "email_prepare"
 PHASE_SIGNUP_SUBMIT = "signup_submit"
 PHASE_SIGNUP_PASSWORD = "signup_password"
 PHASE_OTP_PRIMARY = "otp_primary"
+PHASE_OTP_SECONDARY = "otp_secondary"
 PHASE_ACCOUNT_CREATE = "account_create"
 PHASE_OAUTH_REENTER = "oauth_reenter"
-PHASE_OTP_SECONDARY = "otp_secondary"
 PHASE_WORKSPACE_RESOLVE = "workspace_resolve"
 PHASE_OAUTH_CALLBACK = "oauth_callback"
 ERROR_EMAIL_PROVIDER_RATE_LIMITED = "EMAIL_PROVIDER_RATE_LIMITED"
 ERROR_OTP_TIMEOUT_SECONDARY = "OTP_TIMEOUT_SECONDARY"
+ERROR_INVALID_AUTH_STEP = "INVALID_AUTH_STEP"
 
 
 @dataclass
@@ -922,7 +923,13 @@ class RegistrationEngine:
     ) -> Tuple[Optional[str], PhaseResult]:
         """等待二次验证码邮件并做超时归因。"""
         try:
-            self._log(f"正在等待邮箱 {self.email} 的验证码...")
+            self._emit_status(
+                PHASE_OTP_SECONDARY,
+                "正在等待验证邮件...",
+                email=self.email,
+            )
+            self._log("正在等待验证邮件...")
+            self._log(f"正在轮询邮箱 {self.email} 的验证码邮件...")
 
             email_id = self.email_info.get("service_id") if self.email_info else None
             budget = Budget(
@@ -1126,11 +1133,22 @@ class RegistrationEngine:
             )
 
         if not self._email_verified:
+            otp_secondary_result = self._get_phase_result(PHASE_OTP_SECONDARY)
+            self._log(
+                "account_create 准入失败: otp_secondary 未完成，禁止发送创建账户资料请求",
+                "error",
+            )
             return self._complete_phase(
                 PHASE_ACCOUNT_CREATE,
                 success=False,
                 error_message="邮箱尚未完成验证，禁止创建用户账户",
-                metadata={"email_verified": False},
+                error_code=ERROR_INVALID_AUTH_STEP,
+                metadata={
+                    "email_verified": False,
+                    "otp_secondary_completed": bool(
+                        otp_secondary_result and otp_secondary_result.success
+                    ),
+                },
             )
 
         if not self._create_user_account():

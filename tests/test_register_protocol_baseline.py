@@ -6,6 +6,7 @@ import src.config.constants as constants_module
 import src.core.register as register_module
 from src.config.constants import OPENAI_PAGE_TYPES
 from src.core.register import (
+    ERROR_INVALID_AUTH_STEP,
     PHASE_ACCOUNT_CREATE,
     PHASE_EMAIL_PREPARE,
     PHASE_IP_CHECK,
@@ -215,6 +216,9 @@ def test_phase_account_create_fails_when_email_not_verified(monkeypatch):
 
     assert phase_result.success is False
     assert phase_result.error_message == "邮箱尚未完成验证，禁止创建用户账户"
+    assert phase_result.error_code == ERROR_INVALID_AUTH_STEP
+    assert phase_result.metadata["email_verified"] is False
+    assert phase_result.metadata["otp_secondary_completed"] is False
     assert create_calls == []
 
 

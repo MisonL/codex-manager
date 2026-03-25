@@ -125,6 +125,25 @@ def test_phase_otp_secondary_returns_dedicated_timeout_error_code(monkeypatch):
     assert engine.phase_history[0].error_code == ERROR_OTP_TIMEOUT_SECONDARY
 
 
+def test_await_secondary_otp_code_logs_waiting_for_verification_email(monkeypatch):
+    email_service = FakeEmailService(code="654321")
+    engine = _build_engine(monkeypatch, email_service)
+    engine.email = "tester@example.com"
+    engine.email_info = {"service_id": "svc-1"}
+
+    monkeypatch.setattr(register_module.time, "time", lambda: 120.0)
+
+    code, phase_result = engine._await_secondary_otp_code(
+        PhaseContext(otp_sent_at=77.0),
+        started_at=100.0,
+    )
+
+    assert code == "654321"
+    assert phase_result.success is True
+    assert any("正在等待验证邮件..." in entry for entry in engine.logs)
+    assert any("正在轮询邮箱 tester@example.com 的验证码邮件..." in entry for entry in engine.logs)
+
+
 def test_phase_email_prepare_short_circuits_when_provider_backoff_is_open(monkeypatch):
     email_service = BackoffEmailService(
         EmailProviderBackoffState(
