@@ -360,11 +360,15 @@ body::before {
 
 /* 工具栏卡片允许下拉菜单溢出 */
 .card.toolbar-card {
+    position: relative;
     overflow: visible;
+    z-index: 30;
 }
 
 .card-body.toolbar {
+    position: relative;
     overflow: visible;
+    z-index: 31;
 }
 
 /* ============================================
@@ -819,8 +823,10 @@ form.is-locked .form-group textarea:not(:disabled) {
    ============================================ */
 
 .table-container {
+    position: relative;
     overflow-x: auto;
     border-radius: var(--radius);
+    z-index: 0;
 }
 
 .data-table {
@@ -844,6 +850,7 @@ form.is-locked .form-group textarea:not(:disabled) {
     background: var(--surface-hover);
     position: sticky;
     top: 0;
+    z-index: 5;
 }
 
 .data-table tbody tr {
@@ -876,6 +883,8 @@ form.is-locked .form-group textarea:not(:disabled) {
     flex-wrap: wrap;
     gap: var(--spacing-md);
     overflow: visible;
+    position: relative;
+    z-index: 31;
 }
 
 .toolbar-left,
@@ -883,6 +892,11 @@ form.is-locked .form-group textarea:not(:disabled) {
     display: flex;
     align-items: center;
     gap: var(--spacing-sm);
+}
+
+.toolbar-right {
+    position: relative;
+    z-index: 32;
 }
 
 .form-select,
@@ -1065,6 +1079,7 @@ form.is-locked .form-group textarea:not(:disabled) {
 .dropdown {
     position: relative;
     display: inline-block;
+    z-index: 32;
 }
 
 .dropdown-menu {
@@ -1079,7 +1094,7 @@ form.is-locked .form-group textarea:not(:disabled) {
     border-radius: var(--radius);
     min-width: 160px;
     box-shadow: 0 20px 32px -18px rgb(15 23 42 / 0.38), 0 12px 20px -18px rgb(15 23 42 / 0.24);
-    z-index: 2100;
+    z-index: 2200;
     overflow: hidden;
     opacity: 1;
     animation: fadeIn 0.15s ease;
