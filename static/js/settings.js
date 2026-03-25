@@ -34,6 +34,13 @@ const elements = {
     deleteDisabledProxiesBtn: document.getElementById('delete-disabled-proxies-btn'),
     addProxyModal: document.getElementById('add-proxy-modal'),
     proxyItemForm: document.getElementById('proxy-item-form'),
+    proxyItemId: document.getElementById('proxy-item-id'),
+    proxyItemName: document.getElementById('proxy-item-name'),
+    proxyItemType: document.getElementById('proxy-item-type'),
+    proxyItemHost: document.getElementById('proxy-item-host'),
+    proxyItemPort: document.getElementById('proxy-item-port'),
+    proxyItemUsername: document.getElementById('proxy-item-username'),
+    proxyItemPassword: document.getElementById('proxy-item-password'),
     closeProxyModal: document.getElementById('close-proxy-modal'),
     cancelProxyBtn: document.getElementById('cancel-proxy-btn'),
     proxyModalTitle: document.getElementById('proxy-modal-title'),
@@ -84,19 +91,66 @@ const elements = {
 
 // 选中的服务 ID
 let selectedServiceIds = new Set();
+const loadedTabs = new Set();
+const settingsTabLoaders = {
+    proxy: async () => {
+        await loadProxies();
+    },
+    upload: async () => {
+        await Promise.all([loadCpaServices(), loadSub2ApiServices(), loadTmServices(), loadNewapiServices()]);
+    },
+    outlook: async () => {
+        await loadOutlookSettings();
+    },
+    database: async () => {
+        await loadDatabaseInfo();
+    }
+};
+const controlAutocompleteMap = {
+    'dynamic-proxy-api-url': 'url',
+    'dynamic-proxy-api-key': 'off',
+    'dynamic-proxy-api-key-header': 'off',
+    'dynamic-proxy-result-field': 'off',
+    'webui-access-password': 'new-password',
+    'proxy-item-name': 'off',
+    'proxy-item-host': 'off',
+    'proxy-item-port': 'off',
+    'proxy-item-username': 'off',
+    'proxy-item-password': 'off',
+    'tm-service-name': 'off',
+    'tm-service-url': 'url',
+    'tm-service-key': 'off',
+    'tm-service-priority': 'off',
+    'sub2api-service-name': 'off',
+    'sub2api-service-url': 'url',
+    'sub2api-service-key': 'off',
+    'sub2api-service-priority': 'off',
+    'cpa-service-name': 'off',
+    'cpa-service-url': 'url',
+    'cpa-service-token': 'off',
+    'cpa-service-priority': 'off',
+    'outlook-default-client-id': 'off',
+    'max-retries': 'off',
+    'timeout': 'off',
+    'password-length': 'off',
+    'sleep-min': 'off',
+    'sleep-max': 'off',
+    'email-code-timeout': 'off',
+    'email-code-poll-interval': 'off'
+};
+const syncProxyFormStateDebounced = debounce(() => {
+    window.requestAnimationFrame(syncProxyFormState);
+}, 120);
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
     initTabs();
     loadSettings();
     loadEmailServices();
-    loadDatabaseInfo();
-    loadProxies();
-    loadCpaServices();
-    loadSub2ApiServices();
-    loadTmServices();
-    loadNewapiServices();
     initEventListeners();
+    initProxyFormPerformance();
+    applyFormAccessibility();
+    ensureTabDataLoaded(getActiveTabName());
 });
 
 document.addEventListener('click', () => {
@@ -114,6 +168,7 @@ function initTabs() {
 
             btn.classList.add('active');
             document.getElementById(`${tab}-tab`).classList.add('active');
+            ensureTabDataLoaded(tab);
         });
     });
 }
@@ -364,6 +419,115 @@ async function withFormLock(form, action) {
     }
 }
 
+function getActiveTabName() {
+    const activeTab = document.querySelector('.tab-btn.active');
+    return activeTab?.dataset.tab || 'proxy';
+}
+
+async function ensureTabDataLoaded(tab) {
+    if (!tab || loadedTabs.has(tab)) {
+        return;
+    }
+
+    const loader = settingsTabLoaders[tab];
+    if (!loader) {
+        loadedTabs.add(tab);
+        return;
+    }
+
+    try {
+        await loader();
+        loadedTabs.add(tab);
+    } catch (error) {
+        console.error(`加载 ${tab} 标签数据失败:`, error);
+    }
+}
+
+function getControlLabelText(control) {
+    if (control.labels && control.labels.length > 0) {
+        const labelText = Array.from(control.labels)
+            .map(label => label.textContent.replace(/\s+/g, ' ').trim())
+            .find(Boolean);
+        if (labelText) {
+            return labelText;
+        }
+    }
+
+    const placeholder = control.getAttribute('placeholder');
+    if (placeholder) {
+        return placeholder.trim();
+    }
+
+    const title = control.getAttribute('title');
+    if (title) {
+        return title.trim();
+    }
+
+    const name = control.getAttribute('name');
+    return name ? name.trim() : '';
+}
+
+function applyFormAccessibility(root = document) {
+    root.querySelectorAll('input, select, textarea').forEach(control => {
+        if (control.type === 'hidden') {
+            return;
+        }
+
+        const labelText = getControlLabelText(control);
+        if (labelText && !control.getAttribute('aria-label')) {
+            control.setAttribute('aria-label', labelText);
+        }
+
+        const autocomplete = controlAutocompleteMap[control.id];
+        if (autocomplete && !control.getAttribute('autocomplete')) {
+            control.setAttribute('autocomplete', autocomplete);
+        }
+    });
+
+    root.querySelectorAll('.modal-close').forEach(button => {
+        if (!button.getAttribute('aria-label')) {
+            button.setAttribute('aria-label', '关闭窗口');
+        }
+    });
+}
+
+function readProxyFormState() {
+    return {
+        name: elements.proxyItemName?.value.trim() || '',
+        host: elements.proxyItemHost?.value.trim() || '',
+        port: Number.parseInt(elements.proxyItemPort?.value || '', 10)
+    };
+}
+
+function syncProxyFormState() {
+    const submitButton = elements.proxyItemForm?.querySelector('button[type="submit"]');
+    if (!submitButton) {
+        return;
+    }
+
+    const { name, host, port } = readProxyFormState();
+    const isValid = Boolean(name && host && Number.isInteger(port) && port > 0 && port <= 65535);
+    submitButton.disabled = !isValid;
+}
+
+function initProxyFormPerformance() {
+    const proxyControls = [
+        elements.proxyItemName,
+        elements.proxyItemType,
+        elements.proxyItemHost,
+        elements.proxyItemPort,
+        elements.proxyItemUsername,
+        elements.proxyItemPassword
+    ].filter(Boolean);
+
+    proxyControls.forEach(control => {
+        const eventName = control.tagName === 'SELECT' ? 'change' : 'input';
+        control.addEventListener(eventName, syncProxyFormStateDebounced);
+    });
+
+    syncProxyFormState();
+}
+
 // 加载设置
 async function loadSettings() {
     try {
@@ -387,9 +551,6 @@ async function loadSettings() {
             document.getElementById('email-code-timeout').value = data.email_code.timeout || 120;
             document.getElementById('email-code-poll-interval').value = data.email_code.poll_interval || 3;
         }
-
-        // 加载 Outlook 设置
-        loadOutlookSettings();
 
         // Web UI 访问密码提示
         if (data.webui?.has_access_password) {
@@ -624,9 +785,12 @@ async function loadServiceConfigFields(serviceType) {
                        name="${field.name}"
                        value="${field.default || ''}"
                        placeholder="${field.label}"
+                       aria-label="${field.label}"
+                       autocomplete="off"
                        ${field.required ? 'required' : ''}>
             </div>
         `).join('');
+        applyFormAccessibility(elements.serviceConfigFields);
 
     } catch (error) {
         console.error('加载配置字段失败:', error);
@@ -917,38 +1081,45 @@ function openProxyModal(proxy = null) {
     elements.proxyModalTitle.textContent = proxy ? '编辑代理' : '添加代理';
     elements.proxyItemForm.reset();
 
-    document.getElementById('proxy-item-id').value = proxy ? proxy.id : '';
+    elements.proxyItemId.value = proxy ? proxy.id : '';
 
     if (proxy) {
-        document.getElementById('proxy-item-name').value = proxy.name || '';
-        document.getElementById('proxy-item-type').value = proxy.type || 'http';
-        document.getElementById('proxy-item-host').value = proxy.host || '';
-        document.getElementById('proxy-item-port').value = proxy.port || '';
-        document.getElementById('proxy-item-username').value = proxy.username || '';
-        document.getElementById('proxy-item-password').value = '';
+        elements.proxyItemName.value = proxy.name || '';
+        elements.proxyItemType.value = proxy.type || 'http';
+        elements.proxyItemHost.value = proxy.host || '';
+        elements.proxyItemPort.value = proxy.port || '';
+        elements.proxyItemUsername.value = proxy.username || '';
+        elements.proxyItemPassword.value = '';
     }
 
     elements.addProxyModal.classList.add('active');
+    applyFormAccessibility(elements.addProxyModal);
+    syncProxyFormState();
+    const firstField = proxy ? elements.proxyItemHost : elements.proxyItemName;
+    if (firstField) {
+        window.requestAnimationFrame(() => firstField.focus({ preventScroll: true }));
+    }
 }
 
 // 关闭代理模态框
 function closeProxyModal() {
     elements.addProxyModal.classList.remove('active');
     elements.proxyItemForm.reset();
+    syncProxyFormState();
 }
 
 // 保存代理
 async function handleSaveProxyItem(e) {
     e.preventDefault();
 
-    const proxyId = document.getElementById('proxy-item-id').value;
+    const proxyId = elements.proxyItemId.value;
     const data = {
-        name: document.getElementById('proxy-item-name').value,
-        type: document.getElementById('proxy-item-type').value,
-        host: document.getElementById('proxy-item-host').value,
-        port: parseInt(document.getElementById('proxy-item-port').value),
-        username: document.getElementById('proxy-item-username').value || null,
-        password: document.getElementById('proxy-item-password').value || null,
+        name: elements.proxyItemName.value.trim(),
+        type: elements.proxyItemType.value,
+        host: elements.proxyItemHost.value.trim(),
+        port: parseInt(elements.proxyItemPort.value, 10),
+        username: elements.proxyItemUsername.value.trim() || null,
+        password: elements.proxyItemPassword.value || null,
         enabled: true
     };
 

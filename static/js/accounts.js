@@ -13,6 +13,15 @@ let selectAllPages = false;  // 是否选中了全部页
 let currentFilters = { status: '', email_service: '', search: '' };  // 当前筛选条件
 const refreshingAccountIds = new Set();
 let isBatchValidating = false;
+const accountActionLabels = {
+    refreshList: '刷新列表',
+    refreshToken: '刷新 Token',
+    validateToken: '验证 Token',
+    checkSubscription: '检测订阅',
+    refreshingToken: '刷新 Token 中...',
+    validatingToken: '验证 Token 中...',
+    checkingSubscription: '检测订阅中...'
+};
 
 // DOM 元素
 const elements = {
@@ -86,7 +95,7 @@ function initEventListeners() {
     elements.refreshBtn.addEventListener('click', () => {
         loadStats();
         loadAccounts();
-        toast.info('已刷新');
+        toast.info('已刷新列表');
     });
 
     // 批量刷新Token
@@ -354,7 +363,7 @@ function renderAccounts(accounts) {
                     <div class="dropdown" style="position:relative;">
                         <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();toggleMoreMenu(this)">更多</button>
                         <div class="dropdown-menu" style="min-width:100px;">
-                            <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);refreshToken(${account.id})">刷新</a>
+                            <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);refreshToken(${account.id})">${accountActionLabels.refreshToken}</a>
                             <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);uploadAccount(${account.id})">上传</a>
                             <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);markSubscription(${account.id})">标记</a>
                             <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);checkInboxCode(${account.id})">收件箱</a>
@@ -508,13 +517,21 @@ function updateBatchButtons() {
     elements.exportBtn.disabled = count === 0;
 
     const codexAuthBtn = document.getElementById('codex-auth-login-btn');
-    if (codexAuthBtn) codexAuthBtn.disabled = count === 0;
+    if (codexAuthBtn) {
+        codexAuthBtn.disabled = count === 0;
+    }
 
-    elements.batchDeleteBtn.textContent = count > 0 ? `删除 (${count})` : '删除';
-    elements.batchRefreshBtn.textContent = count > 0 ? `🔄 刷新 (${count})` : '🔄 刷新Token';
-    elements.batchValidateBtn.textContent = count > 0 ? `✅ 验证 (${count})` : '✅ 验证Token';
+    elements.batchDeleteBtn.textContent = count > 0 ? `删除 (${count})` : '批量删除';
+    elements.batchRefreshBtn.textContent = count > 0
+        ? `${accountActionLabels.refreshToken} (${count})`
+        : accountActionLabels.refreshToken;
+    elements.batchValidateBtn.textContent = count > 0
+        ? `${accountActionLabels.validateToken} (${count})`
+        : accountActionLabels.validateToken;
     elements.batchUploadBtn.textContent = count > 0 ? `☁️ 上传 (${count})` : '☁️ 上传';
-    elements.batchCheckSubBtn.textContent = count > 0 ? `🔍 检测 (${count})` : '🔍 检测订阅';
+    elements.batchCheckSubBtn.textContent = count > 0
+        ? `${accountActionLabels.checkSubscription} (${count})`
+        : accountActionLabels.checkSubscription;
 }
 
 // 刷新单个账号Token
@@ -526,11 +543,11 @@ async function refreshToken(id) {
     refreshingAccountIds.add(id);
 
     try {
-        toast.info('正在刷新Token...');
+        toast.info('正在刷新 Token...');
         const result = await api.post(`/accounts/${id}/refresh`);
 
         if (result.success) {
-            toast.success('Token刷新成功');
+            toast.success('Token 刷新成功');
             loadAccounts();
         } else {
             toast.error('刷新失败: ' + (result.error || '未知错误'));
@@ -547,11 +564,11 @@ async function handleBatchRefresh() {
     const count = getEffectiveCount();
     if (count === 0) return;
 
-    const confirmed = await confirm(`确定要刷新选中的 ${count} 个账号的Token吗？`);
+    const confirmed = await confirm(`确定要刷新选中的 ${count} 个账号的 Token 吗？`);
     if (!confirmed) return;
 
     elements.batchRefreshBtn.disabled = true;
-    elements.batchRefreshBtn.textContent = '刷新中...';
+    elements.batchRefreshBtn.textContent = accountActionLabels.refreshingToken;
 
     try {
         const result = await api.post('/accounts/batch-refresh', buildBatchPayload());
@@ -575,7 +592,7 @@ async function handleBatchValidate() {
     isBatchValidating = true;
 
     elements.batchValidateBtn.disabled = true;
-    elements.batchValidateBtn.textContent = '验证中...';
+    elements.batchValidateBtn.textContent = accountActionLabels.validatingToken;
 
     try {
         const result = await api.post('/accounts/batch-validate', buildBatchPayload(), { timeoutMs: 120000 });
@@ -681,7 +698,7 @@ async function viewAccount(id) {
             </div>
             <div style="margin-top: var(--spacing-lg); display: flex; gap: var(--spacing-sm);">
                 <button class="btn btn-primary" onclick="refreshToken(${id}); elements.detailModal.classList.remove('active');">
-                    🔄 刷新Token
+                    ${accountActionLabels.refreshToken}
                 </button>
             </div>
         `;
@@ -993,7 +1010,7 @@ async function handleBatchCheckSubscription() {
     if (!confirmed) return;
 
     elements.batchCheckSubBtn.disabled = true;
-    elements.batchCheckSubBtn.textContent = '检测中...';
+    elements.batchCheckSubBtn.textContent = accountActionLabels.checkingSubscription;
 
     try {
         const result = await api.post('/payment/accounts/batch-check-subscription', buildBatchPayload());
