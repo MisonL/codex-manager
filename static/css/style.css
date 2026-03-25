@@ -194,6 +194,13 @@ body::before {
     border-radius: var(--radius-lg);
 }
 
+.nav-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    flex-shrink: 0;
+}
+
 .nav-link {
     text-decoration: none;
     color: var(--text-secondary);
@@ -225,7 +232,7 @@ body::before {
     cursor: pointer;
     color: var(--text-secondary);
     transition: color var(--transition), background-color var(--transition), border-color var(--transition), transform var(--transition-spring), box-shadow var(--transition);
-    margin-left: var(--spacing-md);
+    margin-left: 0;
 }
 
 .theme-toggle:hover {
@@ -1328,6 +1335,11 @@ form.is-locked .form-group textarea:not(:disabled) {
     }
 
     .nav-links {
+        width: 100%;
+        justify-content: center;
+    }
+
+    .nav-meta {
         width: 100%;
         justify-content: center;
     }
