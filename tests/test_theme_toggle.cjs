@@ -173,39 +173,39 @@ function createSandbox(savedTheme = null) {
   };
 }
 
-test('light theme initializes moon icon on load and DOMContentLoaded', () => {
+test('light theme initializes sun icon on load and DOMContentLoaded', () => {
   const { themeButtons, domEventHandlers, documentElement } = createSandbox('light');
 
   assert.equal(documentElement.getAttribute('data-theme'), 'light');
   themeButtons.forEach((button) => {
-    assert.equal(button.textContent, MOON_ICON);
-    assert.equal(button.title, '切换到暗色模式');
-    assert.equal(button.getAttribute('aria-label'), '切换到暗色模式');
+    assert.equal(button.textContent, SUN_ICON);
+    assert.equal(button.title, '当前为亮色模式');
+    assert.equal(button.getAttribute('aria-label'), '当前为亮色模式');
   });
 
   domEventHandlers.get('DOMContentLoaded')();
 
   themeButtons.forEach((button) => {
-    assert.equal(button.textContent, MOON_ICON);
-    assert.equal(button.title, '切换到暗色模式');
+    assert.equal(button.textContent, SUN_ICON);
+    assert.equal(button.title, '当前为亮色模式');
   });
 });
 
-test('dark theme initializes sun icon on load and DOMContentLoaded', () => {
+test('dark theme initializes moon icon on load and DOMContentLoaded', () => {
   const { themeButtons, domEventHandlers, documentElement } = createSandbox('dark');
 
   assert.equal(documentElement.getAttribute('data-theme'), 'dark');
   themeButtons.forEach((button) => {
-    assert.equal(button.textContent, SUN_ICON);
-    assert.equal(button.title, '切换到亮色模式');
-    assert.equal(button.getAttribute('aria-label'), '切换到亮色模式');
+    assert.equal(button.textContent, MOON_ICON);
+    assert.equal(button.title, '当前为暗色模式');
+    assert.equal(button.getAttribute('aria-label'), '当前为暗色模式');
   });
 
   domEventHandlers.get('DOMContentLoaded')();
 
   themeButtons.forEach((button) => {
-    assert.equal(button.textContent, SUN_ICON);
-    assert.equal(button.title, '切换到亮色模式');
+    assert.equal(button.textContent, MOON_ICON);
+    assert.equal(button.title, '当前为暗色模式');
   });
 });
 
@@ -217,8 +217,8 @@ test('theme.toggle flips theme, icon, and persisted value together', () => {
   assert.equal(documentElement.getAttribute('data-theme'), 'dark');
   assert.equal(storage.get('theme'), 'dark');
   themeButtons.forEach((button) => {
-    assert.equal(button.textContent, SUN_ICON);
-    assert.equal(button.title, '切换到亮色模式');
+    assert.equal(button.textContent, MOON_ICON);
+    assert.equal(button.title, '当前为暗色模式');
   });
 
   vm.runInContext('theme.toggle()', sandbox);
@@ -226,7 +226,7 @@ test('theme.toggle flips theme, icon, and persisted value together', () => {
   assert.equal(documentElement.getAttribute('data-theme'), 'light');
   assert.equal(storage.get('theme'), 'light');
   themeButtons.forEach((button) => {
-    assert.equal(button.textContent, MOON_ICON);
-    assert.equal(button.title, '切换到暗色模式');
+    assert.equal(button.textContent, SUN_ICON);
+    assert.equal(button.title, '当前为亮色模式');
   });
 });

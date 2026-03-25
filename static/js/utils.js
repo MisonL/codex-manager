@@ -115,14 +115,14 @@ class ThemeManager {
     getToggleButtonState() {
         if (this.theme === 'dark') {
             return {
-                icon: String.fromCodePoint(0x2600, 0xFE0F),
-                title: '切换到亮色模式',
+                icon: String.fromCodePoint(0x1F319),
+                title: '当前为暗色模式',
             };
         }
 
         return {
-            icon: String.fromCodePoint(0x1F319),
-            title: '切换到暗色模式',
+            icon: String.fromCodePoint(0x2600, 0xFE0F),
+            title: '当前为亮色模式',
         };
     }
 
