@@ -14,6 +14,11 @@ from curl_cffi.requests import Session, Response
 
 from ..config.constants import ERROR_MESSAGES
 from ..config.settings import get_settings
+from .fingerprint import (
+    DEFAULT_BROWSER_IMPERSONATE,
+    FingerprintProfile,
+    get_fingerprint_profile,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -25,7 +30,7 @@ class RequestConfig:
     timeout: int = 30
     max_retries: int = 3
     retry_delay: float = 1.0
-    impersonate: str = "chrome"
+    impersonate: str = DEFAULT_BROWSER_IMPERSONATE
     verify_ssl: bool = True
     follow_redirects: bool = True
 
@@ -58,6 +63,7 @@ class HTTPClient:
         self.proxy_url = proxy_url
         self.config = config or RequestConfig()
         self._session = session
+        self.fingerprint_profile: FingerprintProfile = get_fingerprint_profile(proxy_url)
 
     @property
     def proxies(self) -> Optional[Dict[str, str]]:
@@ -75,9 +81,10 @@ class HTTPClient:
         if self._session is None:
             self._session = Session(
                 proxies=self.proxies,
-                impersonate=self.config.impersonate,
-                verify=self.config.verify_ssl,
-                timeout=self.config.timeout
+                **self.fingerprint_profile.session_kwargs(
+                    timeout=self.config.timeout,
+                    verify=self.config.verify_ssl,
+                ),
             )
         return self._session
 
@@ -101,9 +108,19 @@ class HTTPClient:
         Raises:
             HTTPClientError: 请求失败
         """
+        request_headers = self.fingerprint_profile.session_headers()
+        if "headers" in kwargs and kwargs["headers"]:
+            request_headers.update(
+                {str(key).lower(): value for key, value in kwargs["headers"].items()}
+            )
+        kwargs["headers"] = request_headers
+
         # 设置默认参数
         kwargs.setdefault("timeout", self.config.timeout)
         kwargs.setdefault("allow_redirects", self.config.follow_redirects)
+        kwargs.setdefault("impersonate", self.fingerprint_profile.impersonate)
+        kwargs.setdefault("extra_fp", self.fingerprint_profile.extra_fp())
+        kwargs.setdefault("default_headers", False)
 
         # 添加代理配置
         if self.proxies and "proxies" not in kwargs:
@@ -254,15 +271,11 @@ class OpenAIHTTPClient(HTTPClient):
 
         # 默认请求头
         self.default_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "keep-alive",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-site",
+            **self.fingerprint_profile.build_headers(
+                url="https://api.openai.com",
+                request_kind="api",
+            ),
+            "connection": "keep-alive",
         }
 
     def check_ip_location(self) -> Tuple[bool, Optional[str]]:
@@ -316,16 +329,20 @@ class OpenAIHTTPClient(HTTPClient):
         Raises:
             HTTPClientError: 请求失败
         """
-        # 合并请求头
-        request_headers = self.default_headers.copy()
+        header_overrides: Dict[str, str] = {}
         if headers:
-            request_headers.update(headers)
+            header_overrides.update(headers)
 
-        # 设置 Content-Type
-        if json_data is not None and "Content-Type" not in request_headers:
-            request_headers["Content-Type"] = "application/json"
-        elif data is not None and "Content-Type" not in request_headers:
-            request_headers["Content-Type"] = "application/x-www-form-urlencoded"
+        if json_data is not None and "Content-Type" not in header_overrides:
+            header_overrides["Content-Type"] = "application/json"
+        elif data is not None and "Content-Type" not in header_overrides:
+            header_overrides["Content-Type"] = "application/x-www-form-urlencoded"
+
+        request_headers = self.fingerprint_profile.build_headers(
+            url=endpoint,
+            request_kind="api",
+            headers=header_overrides,
+        )
 
         try:
             response = self.request(
@@ -367,11 +384,15 @@ class OpenAIHTTPClient(HTTPClient):
 
             response = self.post(
                 OPENAI_API_ENDPOINTS["sentinel"],
-                headers={
-                    "origin": "https://sentinel.openai.com",
-                    "referer": "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=20260219f9f6",
-                    "content-type": "text/plain;charset=UTF-8",
-                },
+                headers=self.fingerprint_profile.build_headers(
+                    url=OPENAI_API_ENDPOINTS["sentinel"],
+                    request_kind="api",
+                    headers={
+                        "origin": "https://sentinel.openai.com",
+                        "referer": "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=20260219f9f6",
+                        "content-type": "text/plain;charset=UTF-8",
+                    },
+                ),
                 data=sen_req_body,
             )
 

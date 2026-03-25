@@ -14,6 +14,7 @@ from ..base import ProviderType, EmailMessage
 from ..account import OutlookAccount
 from ..token_manager import TokenManager
 from .base import OutlookProvider, ProviderConfig
+from ....core.fingerprint import DEFAULT_BROWSER_IMPERSONATE
 
 
 logger = logging.getLogger(__name__)
@@ -141,7 +142,7 @@ class GraphAPIProvider(OutlookProvider):
                 },
                 proxies=proxies,
                 timeout=self.config.timeout,
-                impersonate="chrome110",
+                impersonate=DEFAULT_BROWSER_IMPERSONATE,
             )
 
             if resp.status_code == 401:

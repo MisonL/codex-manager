@@ -13,6 +13,7 @@ from curl_cffi import requests as _requests
 
 from .base import ProviderType, TokenEndpoint, TokenInfo
 from .account import OutlookAccount
+from ...core.fingerprint import DEFAULT_BROWSER_IMPERSONATE
 
 
 logger = logging.getLogger(__name__)
@@ -162,7 +163,7 @@ class TokenManager:
                 headers=headers,
                 proxies=proxies,
                 timeout=self.timeout,
-                impersonate="chrome110",
+                impersonate=DEFAULT_BROWSER_IMPERSONATE,
             )
 
             if resp.status_code != 200:

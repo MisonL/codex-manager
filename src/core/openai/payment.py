@@ -10,6 +10,7 @@ from typing import Optional
 from curl_cffi import requests as cffi_requests
 
 from ...database.models import Account
+from ..fingerprint import get_fingerprint_profile
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,7 @@ def generate_plus_link(
         raise ValueError("账号缺少 access_token")
 
     currency = _COUNTRY_CURRENCY_MAP.get(country, "USD")
+    profile = get_fingerprint_profile(proxy)
     headers = {
         "Authorization": f"Bearer {account.access_token}",
         "Content-Type": "application/json",
@@ -124,11 +126,17 @@ def generate_plus_link(
 
     resp = cffi_requests.post(
         PAYMENT_CHECKOUT_URL,
-        headers=headers,
+        headers=profile.build_headers(
+            url=PAYMENT_CHECKOUT_URL,
+            request_kind="api",
+            headers=headers,
+        ),
         json=payload,
         proxies=_build_proxies(proxy),
         timeout=30,
-        impersonate="chrome110",
+        impersonate=profile.impersonate,
+        extra_fp=profile.extra_fp(),
+        default_headers=False,
     )
     resp.raise_for_status()
     data = resp.json()
@@ -150,6 +158,7 @@ def generate_team_link(
         raise ValueError("账号缺少 access_token")
 
     currency = _COUNTRY_CURRENCY_MAP.get(country, "USD")
+    profile = get_fingerprint_profile(proxy)
     headers = {
         "Authorization": f"Bearer {account.access_token}",
         "Content-Type": "application/json",
@@ -179,11 +188,17 @@ def generate_team_link(
 
     resp = cffi_requests.post(
         PAYMENT_CHECKOUT_URL,
-        headers=headers,
+        headers=profile.build_headers(
+            url=PAYMENT_CHECKOUT_URL,
+            request_kind="api",
+            headers=headers,
+        ),
         json=payload,
         proxies=_build_proxies(proxy),
         timeout=30,
-        impersonate="chrome110",
+        impersonate=profile.impersonate,
+        extra_fp=profile.extra_fp(),
+        default_headers=False,
     )
     resp.raise_for_status()
     data = resp.json()
@@ -233,13 +248,20 @@ def check_subscription_status(account: Account, proxy: Optional[str] = None) -> 
         "Authorization": f"Bearer {account.access_token}",
         "Content-Type": "application/json",
     }
+    profile = get_fingerprint_profile(proxy)
 
     resp = cffi_requests.get(
         "https://chatgpt.com/backend-api/me",
-        headers=headers,
+        headers=profile.build_headers(
+            url="https://chatgpt.com/backend-api/me",
+            request_kind="api",
+            headers=headers,
+        ),
         proxies=_build_proxies(proxy),
         timeout=20,
-        impersonate="chrome110",
+        impersonate=profile.impersonate,
+        extra_fp=profile.extra_fp(),
+        default_headers=False,
     )
     resp.raise_for_status()
     data = resp.json()

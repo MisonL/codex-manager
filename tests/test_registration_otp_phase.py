@@ -11,6 +11,7 @@ from src.core.register import (
 )
 from src.services import EmailServiceType
 from src.services.base import EmailProviderBackoffState
+from types import SimpleNamespace
 
 
 class DummySettings:
@@ -56,9 +57,14 @@ class FakeSession:
     def __init__(self, cookies=None):
         self.cookies = FakeCookies(cookies or {})
         self.get_calls = []
+        self.post_calls = []
 
     def get(self, *args, **kwargs):
         self.get_calls.append((args, kwargs))
+        raise AssertionError("unexpected network call")
+
+    def post(self, *args, **kwargs):
+        self.post_calls.append((args, kwargs))
         raise AssertionError("unexpected network call")
 
 
@@ -194,7 +200,8 @@ def test_advance_login_authorization_sets_otp_anchor_before_password_submit(monk
     monkeypatch.setattr(register_module.time, "time", lambda: 456.0)
     monkeypatch.setattr(engine, "_init_session", lambda: True)
     monkeypatch.setattr(engine, "_start_oauth", lambda: True)
-    monkeypatch.setattr(engine, "_get_device_id", lambda: True)
+    monkeypatch.setattr(engine, "_probe_device_id_validity", lambda stage: True)
+    monkeypatch.setattr(engine, "_current_device_id", lambda: "did-probed")
     monkeypatch.setattr(engine, "_try_reenter_login_flow", lambda: True)
 
     seen_anchors = []
@@ -227,6 +234,76 @@ def test_get_device_id_reuses_existing_cookie_without_extra_request(monkeypatch)
 
     assert engine._get_device_id() == "did-cached"
     assert engine.session.get_calls == []
+
+
+def test_current_device_id_does_not_reuse_stale_memory_when_cookie_missing(monkeypatch):
+    email_service = FakeEmailService(code=None)
+    engine = _build_engine(monkeypatch, email_service)
+    engine.device_id = "did-stale"
+    engine.session = FakeSession(cookies={})
+
+    assert engine._current_device_id() is None
+    assert engine.device_id == "did-stale"
+
+
+def test_rebuild_session_syncs_memory_device_id_from_new_cookie(monkeypatch):
+    email_service = FakeEmailService(code=None)
+    engine = _build_engine(monkeypatch, email_service)
+    engine.device_id = "did-stale"
+    engine.session = FakeSession(cookies={})
+
+    replacement_session = FakeSession(cookies={"oai-did": "did-fresh"})
+
+    class CyclingHTTPClient:
+        def __init__(self, session, fingerprint_profile):
+            self._session = session
+            self.fingerprint_profile = fingerprint_profile
+            self.close_calls = 0
+
+        @property
+        def session(self):
+            return self._session
+
+        def close(self):
+            self.close_calls += 1
+
+    engine.http_client = CyclingHTTPClient(replacement_session, engine.fingerprint_profile)
+
+    engine._rebuild_session("test")
+
+    assert engine.session is replacement_session
+    assert engine.device_id == "did-fresh"
+    assert engine.http_client.close_calls == 1
+
+
+def test_phase_oauth_reenter_force_refreshes_device_id_after_probe_failure(monkeypatch):
+    email_service = FakeEmailService(code=None)
+    engine = _build_engine(monkeypatch, email_service)
+    engine.oauth_start = SimpleNamespace(auth_url="https://auth.example.test/authorize")
+
+    monkeypatch.setattr(register_module.time, "time", lambda: 789.0)
+    monkeypatch.setattr(engine, "_init_session", lambda: True)
+    monkeypatch.setattr(engine, "_start_oauth", lambda: True)
+    monkeypatch.setattr(engine, "_probe_device_id_validity", lambda stage: False)
+    monkeypatch.setattr(engine, "_try_reenter_login_flow", lambda: True)
+    monkeypatch.setattr(engine, "_submit_login_password_step", lambda: True)
+    rebuild_reasons = []
+    monkeypatch.setattr(engine, "_rebuild_session", lambda reason: rebuild_reasons.append(reason))
+
+    seen_force_refresh = []
+
+    def fake_get_device_id(force_refresh=False):
+        seen_force_refresh.append(force_refresh)
+        return "did-fresh"
+
+    monkeypatch.setattr(engine, "_get_device_id", fake_get_device_id)
+
+    phase_result = engine._phase_oauth_reenter()
+
+    assert phase_result.success is True
+    assert seen_force_refresh == [True]
+    assert rebuild_reasons == ["oauth_reenter Device ID 探测失败"]
+    assert phase_result.metadata["otp_sent_at"] == 789.0
 
 
 def test_extract_workspace_id_from_response_payload(monkeypatch):

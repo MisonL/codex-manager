@@ -14,6 +14,7 @@ from curl_cffi import CurlMime
 from ...database.session import get_db
 from ...database.models import Account
 from ...config.settings import get_settings
+from ..fingerprint import DEFAULT_BROWSER_IMPERSONATE
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ def _post_cpa_auth_file_multipart(upload_url: str, filename: str, file_content: 
         headers=_build_cpa_headers(api_token),
         proxies=None,
         timeout=30,
-        impersonate="chrome110",
+        impersonate=DEFAULT_BROWSER_IMPERSONATE,
     )
 
 
@@ -85,7 +86,7 @@ def _post_cpa_auth_file_raw_json(upload_url: str, filename: str, file_content: b
         headers=_build_cpa_headers(api_token, content_type="application/json"),
         proxies=None,
         timeout=30,
-        impersonate="chrome110",
+        impersonate=DEFAULT_BROWSER_IMPERSONATE,
     )
 
 
@@ -306,7 +307,7 @@ def test_cpa_connection(api_url: str, api_token: str, proxy: str = None) -> Tupl
             headers=headers,
             proxies=None,
             timeout=10,
-            impersonate="chrome110",
+            impersonate=DEFAULT_BROWSER_IMPERSONATE,
         )
 
         if response.status_code == 200:
