@@ -202,7 +202,7 @@ function initEventListeners() {
     document.addEventListener('click', () => {
         elements.exportMenu.classList.remove('active');
         uploadMenu.classList.remove('active');
-        document.querySelectorAll('#accounts-table .dropdown-menu.active').forEach(m => m.classList.remove('active'));
+        closeActiveMoreMenus();
     });
 }
 
@@ -361,12 +361,12 @@ function renderAccounts(accounts) {
                 <div style="display:flex;gap:4px;align-items:center;white-space:nowrap;">
                     <button class="btn btn-secondary btn-sm" onclick="viewAccount(${account.id})">详情</button>
                     <div class="dropdown" style="position:relative;">
-                        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();toggleMoreMenu(this)">更多</button>
+                        <button class="btn btn-secondary btn-sm" onclick="toggleMoreMenu(event, this)">更多</button>
                         <div class="dropdown-menu" style="min-width:100px;">
-                            <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);refreshToken(${account.id})">${accountActionLabels.refreshToken}</a>
-                            <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);uploadAccount(${account.id})">上传</a>
-                            <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);markSubscription(${account.id})">标记</a>
-                            <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);checkInboxCode(${account.id})">收件箱</a>
+                            <a href="#" class="dropdown-item" onclick="closeMoreMenu(event, this);refreshToken(${account.id})">${accountActionLabels.refreshToken}</a>
+                            <a href="#" class="dropdown-item" onclick="closeMoreMenu(event, this);uploadAccount(${account.id})">上传</a>
+                            <a href="#" class="dropdown-item" onclick="closeMoreMenu(event, this);markSubscription(${account.id})">标记</a>
+                            <a href="#" class="dropdown-item" onclick="closeMoreMenu(event, this);checkInboxCode(${account.id})">收件箱</a>
                         </div>
                     </div>
                     <button class="btn btn-danger btn-sm" onclick="deleteAccount(${account.id}, '${escapeHtml(account.email)}')">删除</button>
@@ -1378,18 +1378,104 @@ async function handleBatchUploadNewapi() {
     }
 }
 
-// 更多菜单切换
-function toggleMoreMenu(btn) {
-    const menu = btn.nextElementSibling;
-    const isActive = menu.classList.contains('active');
-    // 关闭所有其他更多菜单
-    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
-    if (!isActive) menu.classList.add('active');
+function showMoreMenuPositionError(message) {
+    if (typeof toast !== 'undefined' && typeof toast.error === 'function') {
+        toast.error(message);
+    }
 }
 
-function closeMoreMenu(el) {
-    const menu = el.closest('.dropdown-menu');
-    if (menu) menu.classList.remove('active');
+function resetMoreMenuPosition(menu, dropdown = menu?.closest('.dropdown')) {
+    if (dropdown) {
+        dropdown.classList.remove('dropup', 'dropdown-overlay');
+        dropdown.style.removeProperty('--dropdown-anchor-top');
+        dropdown.style.removeProperty('--dropdown-anchor-left');
+        dropdown.style.removeProperty('--dropdown-trigger-width');
+    }
+}
+
+function closeActiveMoreMenus(exceptMenu = null) {
+    document.querySelectorAll('#accounts-table .dropdown-menu.active').forEach(menu => {
+        if (menu === exceptMenu) {
+            return;
+        }
+        menu.classList.remove('active');
+        resetMoreMenuPosition(menu);
+    });
+}
+
+function positionMoreMenu(btn, menu) {
+    const dropdown = btn?.closest('.dropdown');
+    if (!dropdown) {
+        showMoreMenuPositionError('账号菜单定位失败，已回退为默认位置');
+        resetMoreMenuPosition(menu, null);
+        return false;
+    }
+
+    try {
+        const buttonRect = btn.getBoundingClientRect();
+        const gap = 8;
+        const minBottomSpace = 200;
+        const menuWidth = Math.max(menu.offsetWidth, buttonRect.width, 120);
+        const maxLeft = Math.max(8, window.innerWidth - menuWidth - 8);
+        const rawLeft = Math.max(8, buttonRect.right - menuWidth);
+
+        if (!Number.isFinite(rawLeft) || !Number.isFinite(maxLeft)) {
+            throw new Error('菜单水平坐标计算失败');
+        }
+
+        const left = Math.min(rawLeft, maxLeft);
+        const shouldDropUp = window.innerHeight - buttonRect.bottom < minBottomSpace;
+
+        dropdown.classList.add('dropdown-overlay');
+        dropdown.classList.toggle('dropup', shouldDropUp);
+        dropdown.style.setProperty('--dropdown-anchor-top', `${Math.max(8, shouldDropUp ? buttonRect.top - gap : buttonRect.bottom + gap)}px`);
+        dropdown.style.setProperty('--dropdown-anchor-left', `${left}px`);
+        dropdown.style.setProperty('--dropdown-trigger-width', `${Math.ceil(buttonRect.width)}px`);
+        return true;
+    } catch (error) {
+        console.error('账号菜单定位失败:', error);
+        showMoreMenuPositionError('账号菜单定位失败，已回退为默认位置');
+        resetMoreMenuPosition(menu, dropdown);
+        return false;
+    }
+}
+
+// 更多菜单切换
+function toggleMoreMenu(event, btn) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+
+    const menu = btn?.nextElementSibling;
+    if (!menu || !menu.classList.contains('dropdown-menu')) {
+        showMoreMenuPositionError('账号菜单结构异常，无法打开更多操作');
+        return;
+    }
+
+    if (menu.classList.contains('active')) {
+        closeMoreMenu(null, menu);
+        return;
+    }
+
+    closeActiveMoreMenus(menu);
+    menu.classList.add('active');
+    positionMoreMenu(btn, menu);
+}
+
+function closeMoreMenu(event, el) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+
+    const menu = el?.classList?.contains('dropdown-menu') ? el : el?.closest('.dropdown-menu');
+    if (!menu) {
+        return;
+    }
+
+    menu.classList.remove('active');
+    resetMoreMenuPosition(menu);
 }
 
 // 保存账号 Cookies

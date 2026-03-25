@@ -154,7 +154,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 document.addEventListener('click', () => {
-    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+    closeActiveSettingsMoreMenus();
 });
 
 // 初始化标签页
@@ -1039,11 +1039,11 @@ function renderProxies(proxies) {
                 <div style="display:flex;gap:4px;align-items:center;white-space:nowrap;">
                     <button class="btn btn-secondary btn-sm" onclick="editProxyItem(${proxy.id})">编辑</button>
                     <div class="dropdown" style="position:relative;">
-                        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();toggleSettingsMoreMenu(this)">更多</button>
+                        <button class="btn btn-secondary btn-sm" onclick="toggleSettingsMoreMenu(event, this)">更多</button>
                         <div class="dropdown-menu" style="min-width:80px;">
-                            <a href="#" class="dropdown-item" onclick="event.preventDefault();closeSettingsMoreMenu(this);testProxyItem(${proxy.id})">测试</a>
-                            <a href="#" class="dropdown-item" onclick="event.preventDefault();closeSettingsMoreMenu(this);toggleProxyItem(${proxy.id}, ${!proxy.enabled})">${proxy.enabled ? '禁用' : '启用'}</a>
-                            ${!proxy.is_default ? `<a href="#" class="dropdown-item" onclick="event.preventDefault();closeSettingsMoreMenu(this);handleSetProxyDefault(${proxy.id})">设为默认</a>` : ''}
+                            <a href="#" class="dropdown-item" onclick="closeSettingsMoreMenu(event, this);testProxyItem(${proxy.id})">测试</a>
+                            <a href="#" class="dropdown-item" onclick="closeSettingsMoreMenu(event, this);toggleProxyItem(${proxy.id}, ${!proxy.enabled})">${proxy.enabled ? '禁用' : '启用'}</a>
+                            ${!proxy.is_default ? `<a href="#" class="dropdown-item" onclick="closeSettingsMoreMenu(event, this);handleSetProxyDefault(${proxy.id})">设为默认</a>` : ''}
                         </div>
                     </div>
                     <button class="btn btn-danger btn-sm" onclick="deleteProxyItem(${proxy.id})">删除</button>
@@ -1053,16 +1053,103 @@ function renderProxies(proxies) {
     `).join('');
 }
 
-function toggleSettingsMoreMenu(btn) {
-    const menu = btn.nextElementSibling;
-    const isActive = menu.classList.contains('active');
-    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
-    if (!isActive) menu.classList.add('active');
+function showSettingsMenuPositionError(message) {
+    if (typeof toast !== 'undefined' && typeof toast.error === 'function') {
+        toast.error(message);
+    }
 }
 
-function closeSettingsMoreMenu(el) {
-    const menu = el.closest('.dropdown-menu');
-    if (menu) menu.classList.remove('active');
+function resetSettingsMoreMenuPosition(menu, dropdown = menu?.closest('.dropdown')) {
+    if (dropdown) {
+        dropdown.classList.remove('dropup', 'dropdown-overlay');
+        dropdown.style.removeProperty('--dropdown-anchor-top');
+        dropdown.style.removeProperty('--dropdown-anchor-left');
+        dropdown.style.removeProperty('--dropdown-trigger-width');
+    }
+}
+
+function closeActiveSettingsMoreMenus(exceptMenu = null) {
+    document.querySelectorAll('#proxies-table .dropdown-menu.active').forEach(menu => {
+        if (menu === exceptMenu) {
+            return;
+        }
+        menu.classList.remove('active');
+        resetSettingsMoreMenuPosition(menu);
+    });
+}
+
+function positionSettingsMoreMenu(btn, menu) {
+    const dropdown = btn?.closest('.dropdown');
+    if (!dropdown) {
+        showSettingsMenuPositionError('代理菜单定位失败，已回退为默认位置');
+        resetSettingsMoreMenuPosition(menu, null);
+        return false;
+    }
+
+    try {
+        const buttonRect = btn.getBoundingClientRect();
+        const gap = 8;
+        const minBottomSpace = 200;
+        const menuWidth = Math.max(menu.offsetWidth, buttonRect.width, 120);
+        const maxLeft = Math.max(8, window.innerWidth - menuWidth - 8);
+        const rawLeft = Math.max(8, buttonRect.right - menuWidth);
+
+        if (!Number.isFinite(rawLeft) || !Number.isFinite(maxLeft)) {
+            throw new Error('菜单水平坐标计算失败');
+        }
+
+        const left = Math.min(rawLeft, maxLeft);
+        const shouldDropUp = window.innerHeight - buttonRect.bottom < minBottomSpace;
+
+        dropdown.classList.add('dropdown-overlay');
+        dropdown.classList.toggle('dropup', shouldDropUp);
+        dropdown.style.setProperty('--dropdown-anchor-top', `${Math.max(8, shouldDropUp ? buttonRect.top - gap : buttonRect.bottom + gap)}px`);
+        dropdown.style.setProperty('--dropdown-anchor-left', `${left}px`);
+        dropdown.style.setProperty('--dropdown-trigger-width', `${Math.ceil(buttonRect.width)}px`);
+        return true;
+    } catch (error) {
+        console.error('代理菜单定位失败:', error);
+        showSettingsMenuPositionError('代理菜单定位失败，已回退为默认位置');
+        resetSettingsMoreMenuPosition(menu, dropdown);
+        return false;
+    }
+}
+
+function toggleSettingsMoreMenu(event, btn) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+
+    const menu = btn?.nextElementSibling;
+    if (!menu || !menu.classList.contains('dropdown-menu')) {
+        showSettingsMenuPositionError('代理菜单结构异常，无法打开更多操作');
+        return;
+    }
+
+    if (menu.classList.contains('active')) {
+        closeSettingsMoreMenu(null, menu);
+        return;
+    }
+
+    closeActiveSettingsMoreMenus(menu);
+    menu.classList.add('active');
+    positionSettingsMoreMenu(btn, menu);
+}
+
+function closeSettingsMoreMenu(event, el) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+
+    const menu = el?.classList?.contains('dropdown-menu') ? el : el?.closest('.dropdown-menu');
+    if (!menu) {
+        return;
+    }
+
+    menu.classList.remove('active');
+    resetSettingsMoreMenuPosition(menu);
 }
 
 // 设为默认代理
