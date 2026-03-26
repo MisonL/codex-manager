@@ -52,6 +52,7 @@
     --transition-fast: 150ms ease;
     --transition: 200ms ease;
     --transition-slow: 300ms ease;
+    --transition-spring: 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 
     /* 字体 */
     --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
@@ -119,6 +120,18 @@ body {
     min-height: 100vh;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    transition: background-color var(--transition-slow), color var(--transition-slow);
+}
+
+body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+        radial-gradient(circle at top left, rgba(16, 163, 127, 0.08), transparent 32%),
+        radial-gradient(circle at top right, rgba(59, 130, 246, 0.08), transparent 28%);
+    pointer-events: none;
+    z-index: -1;
 }
 
 /* ============================================
@@ -188,12 +201,13 @@ body {
     border-radius: var(--radius);
     font-size: 0.875rem;
     font-weight: 500;
-    transition: all var(--transition);
+    transition: color var(--transition), background-color var(--transition), transform var(--transition-spring), box-shadow var(--transition);
 }
 
 .nav-link:hover {
     color: var(--text-primary);
     background: var(--surface);
+    transform: translateY(-1px);
 }
 
 .nav-link.active {
@@ -210,13 +224,15 @@ body {
     padding: var(--spacing-sm);
     cursor: pointer;
     color: var(--text-secondary);
-    transition: all var(--transition);
+    transition: color var(--transition), background-color var(--transition), border-color var(--transition), transform var(--transition-spring), box-shadow var(--transition);
     margin-left: var(--spacing-md);
 }
 
 .theme-toggle:hover {
     color: var(--text-primary);
     background: var(--surface-hover);
+    transform: translateY(-1px) scale(1.02);
+    box-shadow: var(--shadow-sm);
 }
 
 /* ============================================
@@ -225,6 +241,24 @@ body {
 
 .main-content {
     padding-bottom: 60px;
+}
+
+.page-header,
+.card,
+.tabs,
+.tab-content.active {
+    animation: page-enter 420ms var(--transition-spring);
+}
+
+@keyframes page-enter {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 .page-header {
@@ -254,11 +288,12 @@ body {
     margin-bottom: var(--spacing-lg);
     box-shadow: var(--shadow-sm);
     overflow: hidden;
-    transition: box-shadow var(--transition);
+    transition: box-shadow var(--transition), transform var(--transition-spring), border-color var(--transition);
 }
 
 .card:hover {
     box-shadow: var(--shadow);
+    transform: translateY(-2px);
 }
 
 .card-header {
@@ -316,7 +351,7 @@ body {
     font-family: inherit;
     background: var(--surface);
     color: var(--text-primary);
-    transition: all var(--transition);
+    transition: border-color var(--transition), box-shadow var(--transition), background-color var(--transition), transform var(--transition-spring);
 }
 
 .form-group input:hover,
@@ -331,6 +366,7 @@ body {
     outline: none;
     border-color: var(--primary-color);
     box-shadow: 0 0 0 3px var(--primary-light);
+    transform: translateY(-1px);
 }
 
 .form-group input::placeholder,
@@ -380,8 +416,9 @@ body {
     border-radius: var(--radius);
     border: none;
     cursor: pointer;
-    transition: all var(--transition);
+    transition: background-color var(--transition), color var(--transition), border-color var(--transition), box-shadow var(--transition), transform var(--transition-spring), opacity var(--transition);
     white-space: nowrap;
+    transform: translateZ(0);
 }
 
 .btn:disabled {
@@ -401,7 +438,7 @@ body {
 }
 
 .btn-primary:active:not(:disabled) {
-    transform: translateY(0);
+    transform: translateY(1px) scale(0.98);
 }
 
 .btn-secondary {
@@ -413,6 +450,8 @@ body {
 .btn-secondary:hover:not(:disabled) {
     background: var(--border);
     border-color: var(--text-muted);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-sm);
 }
 
 .btn-danger {
@@ -423,6 +462,7 @@ body {
 .btn-danger:hover:not(:disabled) {
     background: var(--danger-hover);
     transform: translateY(-1px);
+    box-shadow: var(--shadow-sm);
 }
 
 .btn-warning {
@@ -432,6 +472,7 @@ body {
 
 .btn-warning:hover:not(:disabled) {
     background: #d97706;
+    transform: translateY(-1px);
 }
 
 .btn-ghost {
@@ -466,6 +507,11 @@ body {
 .btn-ghost:hover:not(:disabled) {
     background: var(--surface-hover);
     color: var(--text-primary);
+    transform: translateY(-1px);
+}
+
+.btn:not(:disabled):active {
+    transform: translateY(1px) scale(0.985);
 }
 
 .btn-sm {
@@ -568,49 +614,60 @@ body {
 .status-badge {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: var(--spacing-xs);
-    padding: 4px 12px;
+    padding: 5px 12px;
     border-radius: var(--radius-full);
     font-size: 0.75rem;
     font-weight: 600;
     letter-spacing: 0.025em;
+    border: 1px solid transparent;
+    backdrop-filter: blur(12px);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32);
+    transition: background-color var(--transition), color var(--transition), border-color var(--transition), transform var(--transition-spring), box-shadow var(--transition);
 }
 
 .status-badge::before {
     content: '';
-    width: 6px;
-    height: 6px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     background: currentColor;
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.24);
 }
 
 .status-badge.active,
 .status-badge.running {
     background: var(--success-light);
     color: var(--success-color);
+    border-color: rgba(34, 197, 94, 0.18);
 }
 
 .status-badge.completed {
     background: var(--success-light);
     color: var(--success-color);
+    border-color: rgba(34, 197, 94, 0.18);
 }
 
 .status-badge.pending,
 .status-badge.waiting {
     background: var(--info-light);
     color: var(--info-color);
+    border-color: rgba(59, 130, 246, 0.18);
 }
 
 .status-badge.failed,
 .status-badge.error {
     background: var(--danger-light);
     color: var(--danger-color);
+    border-color: rgba(239, 68, 68, 0.18);
 }
 
 .status-badge.expired,
 .status-badge.warning {
     background: var(--warning-light);
     color: var(--warning-color);
+    border-color: rgba(245, 158, 11, 0.2);
 }
 
 .status-badge.banned {
@@ -621,6 +678,32 @@ body {
 .status-badge.disabled {
     background: var(--border);
     color: var(--text-muted);
+    border-color: rgba(148, 163, 184, 0.22);
+}
+
+.status-badge.ok {
+    background: var(--success-light);
+    color: var(--success-color);
+    border-color: rgba(34, 197, 94, 0.18);
+}
+
+.status-badge.degraded {
+    background: var(--warning-light);
+    color: var(--warning-color);
+    border-color: rgba(245, 158, 11, 0.2);
+}
+
+.status-badge.offline,
+.status-badge.locked {
+    background: var(--danger-light);
+    color: var(--danger-color);
+    border-color: rgba(239, 68, 68, 0.18);
+}
+
+form.is-locked .form-group input:not(:disabled),
+form.is-locked .form-group select:not(:disabled),
+form.is-locked .form-group textarea:not(:disabled) {
+    opacity: 0.75;
 }
 
 /* ============================================

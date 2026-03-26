@@ -340,6 +340,30 @@ function initEventListeners() {
     }
 }
 
+function getFormLockTargets(form) {
+    if (!form) {
+        return [];
+    }
+    return Array.from(form.querySelectorAll('input, select, textarea, button'));
+}
+
+async function withFormLock(form, action) {
+    const controls = getFormLockTargets(form);
+    controls.forEach(control => {
+        control.disabled = true;
+    });
+    form?.classList.add('is-locked');
+
+    try {
+        return await action();
+    } finally {
+        controls.forEach(control => {
+            control.disabled = false;
+        });
+        form?.classList.remove('is-locked');
+    }
+}
+
 // 加载设置
 async function loadSettings() {
     try {
@@ -391,14 +415,16 @@ async function handleSaveWebuiSettings(e) {
         access_password: accessPassword || null
     };
 
-    try {
-        await api.post('/settings/webui', payload);
-        toast.success('Web UI 设置已更新');
-        document.getElementById('webui-access-password').value = '';
-    } catch (error) {
-        console.error('保存 Web UI 设置失败:', error);
-        toast.error('保存 Web UI 设置失败');
-    }
+    await withFormLock(elements.webuiSettingsForm, async () => {
+        try {
+            await api.post('/settings/webui', payload);
+            toast.success('Web UI 设置已更新');
+            document.getElementById('webui-access-password').value = '';
+        } catch (error) {
+            console.error('保存 Web UI 设置失败:', error);
+            toast.error('保存 Web UI 设置失败');
+        }
+    });
 }
 
 // 加载邮箱服务
@@ -501,12 +527,14 @@ async function handleSaveRegistration(e) {
         sleep_max: parseInt(document.getElementById('sleep-max').value),
     };
 
-    try {
-        await api.post('/settings/registration', data);
-        toast.success('注册配置已保存');
-    } catch (error) {
-        toast.error('保存失败: ' + error.message);
-    }
+    await withFormLock(elements.registrationForm, async () => {
+        try {
+            await api.post('/settings/registration', data);
+            toast.success('注册配置已保存');
+        } catch (error) {
+            toast.error('保存失败: ' + error.message);
+        }
+    });
 }
 
 // 保存验证码等待配置
@@ -531,12 +559,14 @@ async function handleSaveEmailCode(e) {
         poll_interval: pollInterval
     };
 
-    try {
-        await api.post('/settings/email-code', data);
-        toast.success('验证码配置已保存');
-    } catch (error) {
-        toast.error('保存失败: ' + error.message);
-    }
+    await withFormLock(elements.emailCodeForm, async () => {
+        try {
+            await api.post('/settings/email-code', data);
+            toast.success('验证码配置已保存');
+        } catch (error) {
+            toast.error('保存失败: ' + error.message);
+        }
+    });
 }
 
 // 备份数据库
@@ -622,15 +652,17 @@ async function handleAddService(e) {
         priority: 0,
     };
 
-    try {
-        await api.post('/email-services', data);
-        toast.success('邮箱服务已添加');
-        elements.addServiceModal.classList.remove('active');
-        elements.addServiceForm.reset();
-        loadEmailServices();
-    } catch (error) {
-        toast.error('添加失败: ' + error.message);
-    }
+    await withFormLock(elements.addServiceForm, async () => {
+        try {
+            await api.post('/email-services', data);
+            toast.success('邮箱服务已添加');
+            elements.addServiceModal.classList.remove('active');
+            elements.addServiceForm.reset();
+            loadEmailServices();
+        } catch (error) {
+            toast.error('添加失败: ' + error.message);
+        }
+    });
 }
 
 // 测试服务
@@ -920,19 +952,21 @@ async function handleSaveProxyItem(e) {
         enabled: true
     };
 
-    try {
-        if (proxyId) {
-            await api.patch(`/settings/proxies/${proxyId}`, data);
-            toast.success('代理已更新');
-        } else {
-            await api.post('/settings/proxies', data);
-            toast.success('代理已添加');
+    await withFormLock(elements.proxyItemForm, async () => {
+        try {
+            if (proxyId) {
+                await api.patch(`/settings/proxies/${proxyId}`, data);
+                toast.success('代理已更新');
+            } else {
+                await api.post('/settings/proxies', data);
+                toast.success('代理已添加');
+            }
+            closeProxyModal();
+            loadProxies();
+        } catch (error) {
+            toast.error('保存失败: ' + error.message);
         }
-        closeProxyModal();
-        loadProxies();
-    } catch (error) {
-        toast.error('保存失败: ' + error.message);
-    }
+    });
 }
 
 // 编辑代理
@@ -1024,12 +1058,14 @@ async function handleSaveOutlookSettings(e) {
     const data = {
         default_client_id: document.getElementById('outlook-default-client-id').value
     };
-    try {
-        await api.post('/settings/outlook', data);
-        toast.success('Outlook 设置已保存');
-    } catch (error) {
-        toast.error('保存失败: ' + error.message);
-    }
+    await withFormLock(elements.outlookSettingsForm, async () => {
+        try {
+            await api.post('/settings/outlook', data);
+            toast.success('Outlook 设置已保存');
+        } catch (error) {
+            toast.error('保存失败: ' + error.message);
+        }
+    });
 }
 
 // ============== 动态代理设置 ==============
@@ -1043,13 +1079,15 @@ async function handleSaveDynamicProxy(e) {
         api_key_header: document.getElementById('dynamic-proxy-api-key-header').value.trim() || 'X-API-Key',
         result_field: document.getElementById('dynamic-proxy-result-field').value.trim()
     };
-    try {
-        await api.post('/settings/proxy/dynamic', data);
-        toast.success('动态代理设置已保存');
-        document.getElementById('dynamic-proxy-api-key').value = '';
-    } catch (error) {
-        toast.error('保存失败: ' + error.message);
-    }
+    await withFormLock(elements.dynamicProxyForm, async () => {
+        try {
+            await api.post('/settings/proxy/dynamic', data);
+            toast.success('动态代理设置已保存');
+            document.getElementById('dynamic-proxy-api-key').value = '';
+        } catch (error) {
+            toast.error('保存失败: ' + error.message);
+        }
+    });
 }
 
 async function handleTestDynamicProxy() {
@@ -1160,23 +1198,25 @@ async function handleSaveTmService(e) {
         return;
     }
 
-    try {
-        const payload = { name, api_url: apiUrl, priority, enabled };
-        if (apiKey) payload.api_key = apiKey;
+    await withFormLock(elements.tmServiceForm, async () => {
+        try {
+            const payload = { name, api_url: apiUrl, priority, enabled };
+            if (apiKey) payload.api_key = apiKey;
 
-        if (id) {
-            await api.patch(`/tm-services/${id}`, payload);
-            toast.success('服务已更新');
-        } else {
-            payload.api_key = apiKey;
-            await api.post('/tm-services', payload);
-            toast.success('服务已添加');
+            if (id) {
+                await api.patch(`/tm-services/${id}`, payload);
+                toast.success('服务已更新');
+            } else {
+                payload.api_key = apiKey;
+                await api.post('/tm-services', payload);
+                toast.success('服务已添加');
+            }
+            closeTmServiceModal();
+            loadTmServices();
+        } catch (e) {
+            toast.error('保存失败: ' + e.message);
         }
-        closeTmServiceModal();
-        loadTmServices();
-    } catch (e) {
-        toast.error('保存失败: ' + e.message);
-    }
+    });
 }
 
 async function deleteTmService(id, name) {
@@ -1445,23 +1485,25 @@ async function handleSaveCpaService(e) {
         return;
     }
 
-    try {
-        const payload = { name, api_url: apiUrl, priority, enabled, include_proxy_url: includeProxyUrl };
-        if (apiToken) payload.api_token = apiToken;
+    await withFormLock(elements.cpaServiceForm, async () => {
+        try {
+            const payload = { name, api_url: apiUrl, priority, enabled, include_proxy_url: includeProxyUrl };
+            if (apiToken) payload.api_token = apiToken;
 
-        if (id) {
-            await api.patch(`/cpa-services/${id}`, payload);
-            toast.success('服务已更新');
-        } else {
-            payload.api_token = apiToken;
-            await api.post('/cpa-services', payload);
-            toast.success('服务已添加');
+            if (id) {
+                await api.patch(`/cpa-services/${id}`, payload);
+                toast.success('服务已更新');
+            } else {
+                payload.api_token = apiToken;
+                await api.post('/cpa-services', payload);
+                toast.success('服务已添加');
+            }
+            closeCpaServiceModal();
+            loadCpaServices();
+        } catch (e) {
+            toast.error('保存失败: ' + e.message);
         }
-        closeCpaServiceModal();
-        loadCpaServices();
-    } catch (e) {
-        toast.error('保存失败: ' + e.message);
-    }
+    });
 }
 
 async function deleteCpaService(id, name) {
@@ -1623,19 +1665,21 @@ async function handleSaveSub2ApiService(e) {
     }
     if (!data.api_key) delete data.api_key;
 
-    try {
-        if (id) {
-            await api.patch(`/sub2api-services/${id}`, data);
-            toast.success('服务已更新');
-        } else {
-            await api.post('/sub2api-services', data);
-            toast.success('服务已添加');
+    await withFormLock(elements.sub2ApiServiceForm, async () => {
+        try {
+            if (id) {
+                await api.patch(`/sub2api-services/${id}`, data);
+                toast.success('服务已更新');
+            } else {
+                await api.post('/sub2api-services', data);
+                toast.success('服务已添加');
+            }
+            closeSub2ApiServiceModal();
+            loadSub2ApiServices();
+        } catch (e) {
+            toast.error('保存失败: ' + e.message);
         }
-        closeSub2ApiServiceModal();
-        loadSub2ApiServices();
-    } catch (e) {
-        toast.error('保存失败: ' + e.message);
-    }
+    });
 }
 
 async function testSub2ApiServiceById(id) {

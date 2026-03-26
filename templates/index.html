@@ -20,6 +20,10 @@
             top: calc(60px + var(--spacing-lg));
         }
 
+        .left-panel.is-locked {
+            opacity: 0.92;
+        }
+
         .right-panel {
             display: flex;
             flex-direction: column;
@@ -130,6 +134,23 @@
         .msd-item input[type=checkbox] { margin: 0; cursor: pointer; }
         .msd-empty { padding: 8px 12px; color: var(--text-muted); font-size: 0.8rem; }
 
+        .panel-meta {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-sm);
+        }
+
+        .config-lock-note {
+            margin-top: var(--spacing-sm);
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        .system-badge {
+            min-width: 112px;
+            justify-content: center;
+        }
+
         /* 响应式 */
         @media (max-width: 1024px) {
             .two-column-layout {
@@ -157,6 +178,9 @@
                 <a href="/settings" class="nav-link">设置</a>
                 <a href="/logout" class="nav-link">退出</a>
             </div>
+            <div class="panel-meta">
+                <span id="system-health-badge" class="status-badge pending system-badge" title="系统健康状态">System Pending</span>
+            </div>
             <button class="theme-toggle" onclick="theme.toggle()" title="切换主题">
                 🌙
             </button>
@@ -166,10 +190,11 @@
         <main class="main-content">
             <div class="two-column-layout">
                 <!-- 左侧面板 - 注册设置 -->
-                <div class="left-panel">
+                <div class="left-panel" id="registration-config-panel">
                     <div class="card">
                         <div class="card-header">
-                            <h3>📝 注册设置</h3>
+                            <h3>注册设置</h3>
+                            <span id="config-lock-badge" class="status-badge locked" style="display: none;">Locked</span>
                         </div>
                         <div class="card-body">
                             <form id="registration-form">
@@ -315,12 +340,15 @@
 
                                 <div class="form-actions" style="flex-direction: column;">
                                     <button type="submit" class="btn btn-primary btn-lg" id="start-btn" style="width: 100%;">
-                                        🚀 开始注册
+                                        开始注册
                                     </button>
                                     <button type="button" class="btn btn-secondary" id="cancel-btn" disabled style="width: 100%;">
                                         取消任务
                                     </button>
                                 </div>
+                                <p id="config-lock-note" class="config-lock-note" style="display: none;">
+                                    配置已锁定，任务结束前不允许修改参数。
+                                </p>
                             </form>
                         </div>
                     </div>
@@ -331,7 +359,7 @@
                     <!-- 监控台 -->
                     <div class="card" id="console-card">
                         <div class="card-header">
-                            <h3>💻 监控台</h3>
+                            <h3>监控台</h3>
                             <div style="display: flex; gap: var(--spacing-sm); align-items: center;">
                                 <span id="task-status-badge" class="status-badge pending" style="display: none;">等待中</span>
                                 <button class="btn btn-ghost btn-sm" id="clear-log-btn">清空</button>
@@ -384,9 +412,9 @@
                     <!-- 已注册账号列表 -->
                     <div class="card">
                         <div class="card-header">
-                            <h3>📋 已注册账号</h3>
+                            <h3>已注册账号</h3>
                             <div style="display: flex; gap: var(--spacing-sm);">
-                                <button class="btn btn-ghost btn-sm" id="refresh-accounts-btn">🔄 刷新</button>
+                                <button class="btn btn-ghost btn-sm" id="refresh-accounts-btn">刷新</button>
                                 <a href="/accounts" class="btn btn-secondary btn-sm">查看全部</a>
                             </div>
                         </div>

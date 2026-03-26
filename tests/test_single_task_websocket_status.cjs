@@ -1,9 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
 const vm = require('node:vm');
 
-const APP_JS_PATH = '/Users/zhoukailian/.config/superpowers/worktrees/codex-manager/repro-batch-monitor/static/js/app.js';
+const APP_JS_PATH = path.join(__dirname, '..', 'static', 'js', 'app.js');
 
 function createElementStub() {
   return {
@@ -15,6 +16,11 @@ function createElementStub() {
     innerHTML: '',
     textContent: '',
     className: '',
+    classList: {
+      add() {},
+      remove() {},
+      toggle() {},
+    },
     appendChild() {},
     addEventListener() {},
     removeEventListener() {},
@@ -32,6 +38,7 @@ function createElementStub() {
 
 function createSandbox() {
   const elements = new Map();
+  const formControls = [];
 
   const sandbox = {
     console,
@@ -47,7 +54,23 @@ function createSandbox() {
     document: {
       getElementById(id) {
         if (!elements.has(id)) {
-          elements.set(id, createElementStub());
+          if (id === 'registration-form') {
+            const form = createElementStub();
+            form.querySelectorAll = (selector) => {
+              if (selector === 'input, select, textarea, button') {
+                return formControls;
+              }
+              return [];
+            };
+            elements.set(id, form);
+          } else {
+            const element = createElementStub();
+            element.id = id;
+            elements.set(id, element);
+            if (['start-btn', 'cancel-btn', 'email-service', 'reg-mode'].includes(id)) {
+              formControls.push(element);
+            }
+          }
         }
         return elements.get(id);
       },
