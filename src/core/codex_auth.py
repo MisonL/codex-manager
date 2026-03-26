@@ -5,10 +5,11 @@ Codex Auth 登录引擎
 
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from .openai.oauth import OAuthManager
-from .register import PhaseContext, RegistrationEngine
+from .register import PhaseContext, PhaseResult, RegistrationEngine
 from ..config.constants import (
     CODEX_OAUTH_ORIGINATOR,
     CODEX_OAUTH_REDIRECT_URI,
@@ -25,8 +26,15 @@ class CodexAuthResult:
     success: bool
     email: str = ""
     workspace_id: str = ""
+    account_id: str = ""
+    access_token: str = ""
+    refresh_token: str = ""
+    id_token: str = ""
+    session_token: str = ""
     auth_json: Optional[Dict[str, Any]] = None
     error_message: str = ""
+    cse_health_status: str = "degraded"
+    metadata: Dict[str, Any] = field(default_factory=dict)
     logs: List[str] = field(default_factory=list)
 
 
@@ -47,6 +55,7 @@ class CodexAuthEngine(RegistrationEngine):
         proxy_url: Optional[str] = None,
         callback_logger: Optional[Callable[[str], None]] = None,
         email_service_id: Optional[str] = None,
+        assigned_workspace_id: Optional[str] = None,
     ):
         super().__init__(
             email_service=email_service,
@@ -56,6 +65,7 @@ class CodexAuthEngine(RegistrationEngine):
         self.email = email
         self.password = password
         self.email_service_id = email_service_id
+        self.assigned_workspace_id = str(assigned_workspace_id or "").strip() or None
         self.email_info = {"email": email}
         if email_service_id:
             self.email_info["service_id"] = email_service_id
@@ -69,6 +79,28 @@ class CodexAuthEngine(RegistrationEngine):
             scope=CODEX_OAUTH_SCOPE,
             proxy_url=proxy_url,
             originator=CODEX_OAUTH_ORIGINATOR,
+        )
+
+    @classmethod
+    def from_registration_engine(
+        cls,
+        engine: RegistrationEngine,
+        *,
+        email: str,
+        password: str,
+        assigned_workspace_id: Optional[str] = None,
+    ) -> "CodexAuthEngine":
+        email_service_id = None
+        if isinstance(getattr(engine, "email_info", None), dict):
+            email_service_id = engine.email_info.get("service_id")
+        return cls(
+            email=email,
+            password=password,
+            email_service=engine.email_service,
+            proxy_url=getattr(engine, "proxy_url", None),
+            callback_logger=getattr(engine, "callback_logger", None),
+            email_service_id=email_service_id,
+            assigned_workspace_id=assigned_workspace_id,
         )
 
     def _build_auth_json(self, token_info: Dict[str, Any]) -> Dict[str, Any]:
@@ -86,6 +118,14 @@ class CodexAuthEngine(RegistrationEngine):
             "last_refresh": now_rfc3339,
         }
 
+    def _select_workspace_for_account(self, consent_workspace_id: Optional[str]) -> Optional[str]:
+        return self.assigned_workspace_id or str(consent_workspace_id or "").strip() or None
+
+    def _session_get(self, url: str, **kwargs):
+        if not self.session:
+            raise RuntimeError("session not initialized")
+        return self.session.get(url, **kwargs)
+
     def _resolve_workspace_id(self, consent_url: Optional[str]) -> Optional[str]:
         """
         OTP 校验成功后优先请求 consent 页面提取 workspace。
@@ -98,7 +138,7 @@ class CodexAuthEngine(RegistrationEngine):
         try:
             self._log(f"请求 consent 页面: {auth_target[:120]}...")
             started_at = time.time()
-            response = self.session.get(auth_target, timeout=20)
+            response = self._session_get(auth_target, timeout=20)
             self._log_timed_http_result("获取 consent 页面", started_at, response)
 
             workspace_id = self._extract_workspace_id_from_response(
@@ -115,8 +155,63 @@ class CodexAuthEngine(RegistrationEngine):
         self._log("consent 页面缺少 workspace_id，回退到 Cookie 解析路径", "warning")
         return RegistrationEngine._get_workspace_id(self)
 
-    def run(self) -> CodexAuthResult:
-        """执行 Codex Auth 登录并产出 auth.json。"""
+    def _resolve_workspace_authorization(self) -> PhaseResult:
+        consent_target = self._pending_continue_url or (
+            self.oauth_start.auth_url if self.oauth_start else None
+        )
+        if not consent_target:
+            return PhaseResult(
+                phase="workspace_authorization",
+                success=False,
+                error_message="缺少 consent 页面地址",
+            )
+
+        try:
+            consent_workspace_id = self._resolve_workspace_id(consent_target)
+            workspace_id = self._select_workspace_for_account(consent_workspace_id)
+            if not workspace_id:
+                return PhaseResult(
+                    phase="workspace_authorization",
+                    success=False,
+                    error_message="获取 Workspace ID 失败",
+                )
+
+            continue_url = self._select_workspace(workspace_id)
+            if not continue_url:
+                return PhaseResult(
+                    phase="workspace_authorization",
+                    success=False,
+                    error_message="选择 Workspace 失败",
+                )
+
+            callback_url = self._follow_redirects(continue_url)
+            if not callback_url:
+                return PhaseResult(
+                    phase="workspace_authorization",
+                    success=False,
+                    error_message="获取回调 URL 失败",
+                )
+
+            self._resolved_workspace_id = workspace_id
+            self._callback_url = callback_url
+            return PhaseResult(
+                phase="workspace_authorization",
+                success=True,
+                metadata={
+                    "workspace_id": workspace_id,
+                    "callback_url": callback_url,
+                    "assigned_workspace_id": self.assigned_workspace_id or "",
+                },
+            )
+        except Exception as e:
+            return PhaseResult(
+                phase="workspace_authorization",
+                success=False,
+                error_message=str(e),
+            )
+
+    def authorize(self) -> CodexAuthResult:
+        """执行官方 Codex Auth 授权流程。"""
         result = CodexAuthResult(success=False, email=self.email, logs=self.logs)
 
         try:
@@ -166,39 +261,45 @@ class CodexAuthEngine(RegistrationEngine):
             if not otp_valid:
                 result.error_message = "验证码校验失败"
                 return result
+            self._pending_continue_url = consent_url or (
+                self.oauth_start.auth_url if self.oauth_start else None
+            )
 
-            self._log("8. 获取 Workspace ID...")
-            workspace_id = self._resolve_workspace_id(consent_url)
-            if not workspace_id:
-                result.error_message = "获取 Workspace ID 失败"
-                return result
-            result.workspace_id = workspace_id
-
-            self._log("9. 选择 Workspace...")
-            continue_url = RegistrationEngine._select_workspace(self, workspace_id)
-            if not continue_url:
-                result.error_message = "选择 Workspace 失败"
+            self._log("8. 解析 Workspace 并执行授权...")
+            workspace_phase = self._resolve_workspace_authorization()
+            if not workspace_phase.success:
+                result.error_message = workspace_phase.error_message or "Workspace 授权失败"
                 return result
 
-            self._log("10. 跟随重定向...")
-            callback_url = RegistrationEngine._follow_redirects(self, continue_url)
-            if not callback_url:
-                result.error_message = "获取回调 URL 失败"
-                return result
-
-            self._log("11. 处理 OAuth 回调...")
-            token_info = RegistrationEngine._handle_oauth_callback(self, callback_url)
+            self._log("9. 处理 OAuth 回调...")
+            token_info = RegistrationEngine._handle_oauth_callback(self, self._callback_url)
             if not token_info:
                 result.error_message = "OAuth 回调处理失败"
                 return result
 
+            session_cookie = ""
+            if self.session is not None and getattr(self.session, "cookies", None) is not None:
+                session_cookie = self.session.cookies.get("__Secure-next-auth.session-token") or ""
+
+            result.workspace_id = self._resolved_workspace_id or ""
+            result.account_id = str(token_info.get("account_id") or "").strip()
+            result.access_token = str(token_info.get("access_token") or "")
+            result.refresh_token = str(token_info.get("refresh_token") or "")
+            result.id_token = str(token_info.get("id_token") or "")
+            result.session_token = session_cookie
             result.auth_json = self._build_auth_json(token_info)
+            result.cse_health_status = "healthy"
+            result.metadata = {
+                "authorized_at": datetime.utcnow().isoformat(),
+                "execution_mode": self._resolved_execution_mode(),
+                "assigned_workspace_id": self.assigned_workspace_id or "",
+            }
             result.success = True
 
             self._log("=" * 50)
             self._log(f"Codex Auth 登录成功: {self.email}")
-            self._log(f"Account ID: {token_info.get('account_id', '')}")
-            self._log(f"Workspace ID: {workspace_id}")
+            self._log(f"Account ID: {result.account_id}")
+            self._log(f"Workspace ID: {result.workspace_id}")
             self._log("=" * 50)
             return result
 
@@ -207,7 +308,16 @@ class CodexAuthEngine(RegistrationEngine):
             result.error_message = str(e)
             return result
         finally:
+            if not result.success:
+                result.cse_health_status = "degraded"
+                result.metadata = {
+                    **dict(result.metadata or {}),
+                    "execution_mode": self._resolved_execution_mode(),
+                }
             try:
                 self.http_client.close()
             except Exception:
                 pass
+
+    def run(self) -> CodexAuthResult:
+        return self.authorize()

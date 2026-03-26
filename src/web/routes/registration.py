@@ -30,6 +30,7 @@ from ..task_manager import task_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+CodexAuthEngine = None
 
 # 任务存储（简单的内存存储，生产环境应使用 Redis）
 running_tasks: dict = {}
@@ -101,6 +102,100 @@ def disable_proxy_for_network_error(db, proxy_id: Optional[int], reason: str) ->
     return True
 
 
+def _build_codex_auth_hook_payload(auth_result) -> Dict[str, Any]:
+    payload = {
+        "success": auth_result.success,
+        "workspace_id": auth_result.workspace_id,
+        "account_id": auth_result.account_id,
+        "error_message": auth_result.error_message,
+    }
+    payload.update(dict(auth_result.metadata or {}))
+    return payload
+
+
+def _run_codex_official_auth_hook(
+    db,
+    *,
+    registration_engine: RegistrationEngine,
+    saved_account,
+    result: RegistrationResult,
+    log_callback,
+):
+    """在注册成功后执行一次官方 Codex Auth 授权，并把结果回写到账户。"""
+    metadata = dict(result.metadata or {})
+    password = result.password or getattr(saved_account, "password", "") or ""
+    if not password:
+        metadata["codex_auth_hook"] = {
+            "success": False,
+            "skipped": True,
+            "reason": "missing_password",
+        }
+        result.metadata = metadata
+        log_callback("[Codex Auth] 跳过官方授权: 账号缺少密码")
+        return saved_account
+
+    engine_cls = CodexAuthEngine
+    if engine_cls is None:
+        from ...core.codex_auth import CodexAuthEngine as engine_cls
+        globals()["CodexAuthEngine"] = engine_cls
+
+    auth_engine = engine_cls.from_registration_engine(
+        registration_engine,
+        email=saved_account.email,
+        password=password,
+        assigned_workspace_id=result.workspace_id or getattr(saved_account, "workspace_id", "") or None,
+    )
+    auth_result = auth_engine.authorize()
+
+    metadata["codex_auth_hook"] = _build_codex_auth_hook_payload(auth_result)
+    result.metadata = metadata
+
+    extra_data = dict(saved_account.extra_data or {})
+    extra_data["codex_auth_hook"] = dict(metadata["codex_auth_hook"])
+    saved_account.extra_data = extra_data
+    saved_account.codex_auth_status = "authorized" if auth_result.success else "failed"
+    saved_account.cse_health_status = auth_result.cse_health_status
+
+    if auth_result.success:
+        if auth_result.account_id:
+            saved_account.account_id = auth_result.account_id
+            result.account_id = auth_result.account_id
+        if auth_result.workspace_id:
+            saved_account.workspace_id = auth_result.workspace_id
+            result.workspace_id = auth_result.workspace_id
+        if auth_result.access_token:
+            saved_account.access_token = auth_result.access_token
+            result.access_token = auth_result.access_token
+        if auth_result.refresh_token:
+            saved_account.refresh_token = auth_result.refresh_token
+            result.refresh_token = auth_result.refresh_token
+        if auth_result.id_token:
+            saved_account.id_token = auth_result.id_token
+            result.id_token = auth_result.id_token
+        if auth_result.session_token:
+            saved_account.session_token = auth_result.session_token
+            result.session_token = auth_result.session_token
+        saved_account.last_refresh = datetime.utcnow()
+        token_values = (
+            saved_account.access_token,
+            saved_account.refresh_token,
+            saved_account.id_token,
+            saved_account.session_token,
+        )
+        saved_account.token_sync_status = "pending" if any(token_values) else "not_ready"
+        saved_account.token_sync_updated_at = datetime.utcnow()
+        log_callback(f"[Codex Auth] 官方授权成功: {saved_account.email}")
+    else:
+        extra_data = dict(saved_account.extra_data or {})
+        extra_data["codex_auth_error"] = auth_result.error_message
+        saved_account.extra_data = extra_data
+        log_callback(f"[Codex Auth] 官方授权失败: {saved_account.email}: {auth_result.error_message}")
+
+    db.commit()
+    db.refresh(saved_account)
+    return saved_account
+
+
 # ============== Pydantic Models ==============
 
 class RegistrationTaskCreate(BaseModel):
@@ -109,6 +204,7 @@ class RegistrationTaskCreate(BaseModel):
     proxy: Optional[str] = None
     email_service_config: Optional[dict] = None
     email_service_id: Optional[int] = None
+    auto_codex_auth: bool = False
     auto_upload_cpa: bool = False
     cpa_service_ids: List[int] = []  # 指定 CPA 服务 ID 列表，空则取第一个启用的
     auto_upload_sub2api: bool = False
@@ -130,6 +226,7 @@ class BatchRegistrationRequest(BaseModel):
     interval_max: int = 30
     concurrency: int = 1
     mode: str = "pipeline"
+    auto_codex_auth: bool = False
     auto_upload_cpa: bool = False
     cpa_service_ids: List[int] = []
     auto_upload_sub2api: bool = False
@@ -214,6 +311,7 @@ class OutlookBatchRegistrationRequest(BaseModel):
     interval_max: int = 30
     concurrency: int = 1
     mode: str = "pipeline"
+    auto_codex_auth: bool = False
     auto_upload_cpa: bool = False
     cpa_service_ids: List[int] = []
     auto_upload_sub2api: bool = False
@@ -540,7 +638,7 @@ def _build_email_service_candidates(
     return candidates
 
 
-def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None, auto_upload_newapi: bool = False, newapi_service_ids: List[int] = None):
+def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_codex_auth: bool = False, auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None, auto_upload_newapi: bool = False, newapi_service_ids: List[int] = None):
     """
     在线程池中执行的同步注册任务
 
@@ -699,14 +797,27 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 update_proxy_usage(db, proxy_id)
 
                 # 保存到数据库
-                engine.save_to_database(result)
+                if not engine.save_to_database(result):
+                    raise RuntimeError("注册结果保存到数据库失败")
+
+                from ...database.models import Account as AccountModel
+                saved_account = db.query(AccountModel).filter_by(email=result.email).first()
+                if not saved_account:
+                    raise RuntimeError(f"注册成功但未找到已保存账号: {result.email}")
+
+                if auto_codex_auth:
+                    saved_account = _run_codex_official_auth_hook(
+                        db,
+                        registration_engine=engine,
+                        saved_account=saved_account,
+                        result=result,
+                        log_callback=log_callback,
+                    )
 
                 # 自动上传到 CPA（可多服务）
                 if auto_upload_cpa:
                     try:
                         from ...core.upload.cpa_upload import upload_to_cpa, generate_token_json
-                        from ...database.models import Account as AccountModel
-                        saved_account = db.query(AccountModel).filter_by(email=result.email).first()
                         if saved_account and saved_account.access_token:
                             _cpa_ids = cpa_service_ids or []
                             if not _cpa_ids:
@@ -741,8 +852,6 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 if auto_upload_sub2api:
                     try:
                         from ...core.upload.sub2api_upload import upload_to_sub2api
-                        from ...database.models import Account as AccountModel
-                        saved_account = db.query(AccountModel).filter_by(email=result.email).first()
                         if saved_account and saved_account.access_token:
                             _s2a_ids = sub2api_service_ids or []
                             if not _s2a_ids:
@@ -766,8 +875,6 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 if auto_upload_tm:
                     try:
                         from ...core.upload.team_manager_upload import upload_to_team_manager
-                        from ...database.models import Account as AccountModel
-                        saved_account = db.query(AccountModel).filter_by(email=result.email).first()
                         if saved_account and saved_account.access_token:
                             _tm_ids = tm_service_ids or []
                             if not _tm_ids:
@@ -790,8 +897,6 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 if auto_upload_newapi:
                     try:
                         from ...core.upload.newapi_upload import upload_to_newapi
-                        from ...database.models import Account as AccountModel
-                        saved_account = db.query(AccountModel).filter_by(email=result.email).first()
                         if saved_account and saved_account.access_token:
                             _na_ids = newapi_service_ids or []
                             if not _na_ids:
@@ -885,7 +990,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 pass
 
 
-async def run_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None, auto_upload_newapi: bool = False, newapi_service_ids: List[int] = None):
+async def run_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_codex_auth: bool = False, auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None, auto_upload_newapi: bool = False, newapi_service_ids: List[int] = None):
     """
     异步执行注册任务
 
@@ -912,6 +1017,7 @@ async def run_registration_task(task_uuid: str, email_service_type: str, proxy: 
             email_service_id,
             log_prefix,
             batch_id,
+            auto_codex_auth,
             auto_upload_cpa,
             cpa_service_ids or [],
             auto_upload_sub2api,
@@ -1220,6 +1326,7 @@ async def run_batch_parallel(
     email_service_config: Optional[dict],
     email_service_id: Optional[int],
     concurrency: int,
+    auto_codex_auth: bool = False,
     auto_upload_cpa: bool = False,
     cpa_service_ids: List[int] = None,
     auto_upload_sub2api: bool = False,
@@ -1244,6 +1351,7 @@ async def run_batch_parallel(
             await run_registration_task(
                 uuid, email_service_type, proxy, email_service_config, email_service_id,
                 log_prefix=prefix, batch_id=batch_id,
+                auto_codex_auth=auto_codex_auth,
                 auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids or [],
                 auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids or [],
                 auto_upload_tm=auto_upload_tm, tm_service_ids=tm_service_ids or [],
@@ -1292,6 +1400,7 @@ async def run_batch_pipeline(
     interval_min: int,
     interval_max: int,
     concurrency: int,
+    auto_codex_auth: bool = False,
     auto_upload_cpa: bool = False,
     cpa_service_ids: List[int] = None,
     auto_upload_sub2api: bool = False,
@@ -1316,6 +1425,7 @@ async def run_batch_pipeline(
             await run_registration_task(
                 uuid, email_service_type, proxy, email_service_config, email_service_id,
                 log_prefix=pfx, batch_id=batch_id,
+                auto_codex_auth=auto_codex_auth,
                 auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids or [],
                 auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids or [],
                 auto_upload_tm=auto_upload_tm, tm_service_ids=tm_service_ids or [],
@@ -1388,6 +1498,7 @@ async def run_batch_registration(
     interval_max: int,
     concurrency: int = 1,
     mode: str = "pipeline",
+    auto_codex_auth: bool = False,
     auto_upload_cpa: bool = False,
     cpa_service_ids: List[int] = None,
     auto_upload_sub2api: bool = False,
@@ -1402,6 +1513,7 @@ async def run_batch_registration(
         await run_batch_parallel(
             batch_id, task_uuids, email_service_type, proxy,
             email_service_config, email_service_id, concurrency,
+            auto_codex_auth=auto_codex_auth,
             auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids,
             auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids,
             auto_upload_tm=auto_upload_tm, tm_service_ids=tm_service_ids,
@@ -1412,6 +1524,7 @@ async def run_batch_registration(
             batch_id, task_uuids, email_service_type, proxy,
             email_service_config, email_service_id,
             interval_min, interval_max, concurrency,
+            auto_codex_auth=auto_codex_auth,
             auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids,
             auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids,
             auto_upload_tm=auto_upload_tm, tm_service_ids=tm_service_ids,
@@ -1511,6 +1624,7 @@ async def start_registration(
         request.email_service_id,
         "",
         "",
+        request.auto_codex_auth,
         request.auto_upload_cpa,
         request.cpa_service_ids,
         request.auto_upload_sub2api,
@@ -1590,6 +1704,7 @@ async def start_batch_registration(
         request.interval_max,
         request.concurrency,
         request.mode,
+        request.auto_codex_auth,
         request.auto_upload_cpa,
         request.cpa_service_ids,
         request.auto_upload_sub2api,
@@ -2012,6 +2127,7 @@ async def run_outlook_batch_registration(
     interval_max: int,
     concurrency: int = 1,
     mode: str = "pipeline",
+    auto_codex_auth: bool = False,
     auto_upload_cpa: bool = False,
     cpa_service_ids: List[int] = None,
     auto_upload_sub2api: bool = False,
@@ -2057,6 +2173,7 @@ async def run_outlook_batch_registration(
         interval_max=interval_max,
         concurrency=concurrency,
         mode=mode,
+        auto_codex_auth=auto_codex_auth,
         auto_upload_cpa=auto_upload_cpa,
         cpa_service_ids=cpa_service_ids,
         auto_upload_sub2api=auto_upload_sub2api,
@@ -2157,6 +2274,7 @@ async def start_outlook_batch_registration(
         request.interval_max,
         request.concurrency,
         request.mode,
+        request.auto_codex_auth,
         request.auto_upload_cpa,
         request.cpa_service_ids,
         request.auto_upload_sub2api,
