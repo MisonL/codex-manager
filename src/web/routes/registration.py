@@ -802,7 +802,16 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
 
                 from ...database.models import Account as AccountModel
                 saved_account = db.query(AccountModel).filter_by(email=result.email).first()
-                if not saved_account:
+                requires_saved_account = any(
+                    (
+                        auto_codex_auth,
+                        auto_upload_cpa,
+                        auto_upload_sub2api,
+                        auto_upload_tm,
+                        auto_upload_newapi,
+                    )
+                )
+                if requires_saved_account and not saved_account:
                     raise RuntimeError(f"注册成功但未找到已保存账号: {result.email}")
 
                 if auto_codex_auth:
