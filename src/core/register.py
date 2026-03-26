@@ -444,12 +444,13 @@ class RegistrationEngine:
     def _phase_ip_check(self) -> PhaseResult:
         ip_ok, location = self._check_ip_location()
         if not ip_ok:
-            self._log(f"IP 检查失败: {location}", "error")
+            detail = location or "IP 地理位置检查失败"
+            self._log(f"IP 检查失败: {detail}", "error")
             return self._complete_phase(
                 PHASE_IP_CHECK,
                 success=False,
-                error_message=f"IP 地理位置不支持: {location}",
-                metadata={"location": location},
+                error_message=detail,
+                metadata={"location": detail},
             )
 
         self._log(f"IP 位置: {location}")
@@ -606,6 +607,10 @@ class RegistrationEngine:
         """检查 IP 地理位置"""
         try:
             return self.http_client.check_ip_location()
+        except HTTPClientError as e:
+            detail = str(e)
+            self._log(f"检查 IP 地理位置失败: {detail}", "error")
+            return False, detail
         except Exception as e:
             self._log(f"检查 IP 地理位置失败: {e}", "error")
             return False, None

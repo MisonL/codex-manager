@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import src.config.constants as constants_module
 import src.core.register as register_module
 from src.config.constants import OPENAI_PAGE_TYPES
+from src.core.http_client import HTTPClientError
 from src.core.register import (
     ERROR_INVALID_AUTH_STEP,
     PHASE_ACCOUNT_CREATE,
@@ -220,6 +221,23 @@ def test_phase_account_create_fails_when_email_not_verified(monkeypatch):
     assert phase_result.metadata["email_verified"] is False
     assert phase_result.metadata["otp_secondary_completed"] is False
     assert create_calls == []
+
+
+def test_phase_ip_check_returns_detailed_proxy_error(monkeypatch):
+    engine = _build_engine(monkeypatch)
+    error_message = "无法通过代理 [socks5://user:***@127.0.0.1:1080] 连接到地理位置服务 [ip-api.com]"
+
+    monkeypatch.setattr(
+        engine.http_client,
+        "check_ip_location",
+        lambda: (_ for _ in ()).throw(HTTPClientError(error_message)),
+    )
+
+    phase_result = engine._phase_ip_check()
+
+    assert phase_result.success is False
+    assert phase_result.error_message == error_message
+    assert phase_result.metadata["location"] == error_message
 
 
 def test_run_jumps_to_workspace_phase_when_oauth_reenter_is_retryable(monkeypatch):
