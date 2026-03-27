@@ -13,6 +13,7 @@ let selectAllPages = false;  // 是否选中了全部页
 let currentFilters = { status: '', email_service: '', search: '' };  // 当前筛选条件
 const refreshingAccountIds = new Set();
 let isBatchValidating = false;
+const ACCOUNT_TABLE_COLUMN_COUNT = 11;
 const accountActionLabels = {
     refreshList: '刷新列表',
     refreshToken: '刷新 Token',
@@ -58,6 +59,38 @@ document.addEventListener('DOMContentLoaded', () => {
     updateBatchButtons();  // 初始化按钮状态
     renderSelectAllBanner();
 });
+
+function setAccountsModalOpen(modal, open) {
+    if (!modal) {
+        return;
+    }
+    modal.classList.toggle('active', open);
+}
+
+function closeAccountsModalById(modalId) {
+    const modal = document.getElementById(modalId);
+    setAccountsModalOpen(modal, false);
+}
+
+function bindSimpleModal(modalId, closeButtonIds = []) {
+    const modal = document.getElementById(modalId);
+    if (!modal) {
+        return;
+    }
+
+    closeButtonIds.forEach((buttonId) => {
+        const button = document.getElementById(buttonId);
+        if (button) {
+            button.addEventListener('click', () => closeAccountsModalById(modalId));
+        }
+    });
+
+    modal.addEventListener('click', (event) => {
+        if (event.target === modal) {
+            closeAccountsModalById(modalId);
+        }
+    });
+}
 
 // 事件监听
 function initEventListeners() {
@@ -126,18 +159,7 @@ function initEventListeners() {
     if (codexAuthBtn) {
         codexAuthBtn.addEventListener('click', handleCodexAuthLogin);
     }
-    const closeCodexAuthModal = document.getElementById('close-codex-auth-modal');
-    if (closeCodexAuthModal) {
-        closeCodexAuthModal.addEventListener('click', () => {
-            document.getElementById('codex-auth-modal').classList.remove('active');
-        });
-    }
-    const closeCodexAuthModalBtn = document.getElementById('close-codex-auth-modal-btn');
-    if (closeCodexAuthModalBtn) {
-        closeCodexAuthModalBtn.addEventListener('click', () => {
-            document.getElementById('codex-auth-modal').classList.remove('active');
-        });
-    }
+    bindSimpleModal('codex-auth-modal', ['close-codex-auth-modal', 'close-codex-auth-modal-btn']);
 
     // 全选（当前页）
     elements.selectAll.addEventListener('change', (e) => {
@@ -187,22 +209,21 @@ function initEventListeners() {
         elements.exportMenu.classList.remove('active');
     });
 
-    // 关闭模态框
-    elements.closeModal.addEventListener('click', () => {
-        elements.detailModal.classList.remove('active');
-    });
-
-    elements.detailModal.addEventListener('click', (e) => {
-        if (e.target === elements.detailModal) {
-            elements.detailModal.classList.remove('active');
-        }
-    });
+    bindSimpleModal('detail-modal', ['close-modal']);
 
     // 点击其他地方关闭下拉菜单
     document.addEventListener('click', () => {
         elements.exportMenu.classList.remove('active');
         uploadMenu.classList.remove('active');
         closeActiveMoreMenus();
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') {
+            return;
+        }
+        closeAccountsModalById('detail-modal');
+        closeAccountsModalById('codex-auth-modal');
     });
 }
 
@@ -240,7 +261,7 @@ async function loadAccounts() {
     // 显示加载状态
     elements.table.innerHTML = `
         <tr>
-            <td colspan="9">
+            <td colspan="${ACCOUNT_TABLE_COLUMN_COUNT}">
                 <div class="empty-state">
                     <div class="skeleton skeleton-text" style="width: 60%;"></div>
                     <div class="skeleton skeleton-text" style="width: 80%;"></div>
@@ -281,7 +302,7 @@ async function loadAccounts() {
         console.error('加载账号列表失败:', error);
         elements.table.innerHTML = `
             <tr>
-                <td colspan="9">
+                <td colspan="${ACCOUNT_TABLE_COLUMN_COUNT}">
                     <div class="empty-state">
                         <div class="empty-state-icon">❌</div>
                         <div class="empty-state-title">加载失败</div>
@@ -313,7 +334,7 @@ function renderAccounts(accounts) {
     if (accounts.length === 0) {
         elements.table.innerHTML = `
             <tr>
-                <td colspan="9">
+                <td colspan="${ACCOUNT_TABLE_COLUMN_COUNT}">
                     <div class="empty-state">
                         <div class="empty-state-icon">📭</div>
                         <div class="empty-state-title">暂无数据</div>
@@ -1284,14 +1305,16 @@ function selectNewapiService() {
         const closeBtn = document.getElementById('close-newapi-modal');
         const cancelBtn = document.getElementById('cancel-newapi-modal-btn');
         const autoBtn = document.getElementById('newapi-use-auto-btn');
+        let settled = false;
 
         listEl.innerHTML = '<div style="text-align:center;color:var(--text-muted)">加载中...</div>';
-        modal.classList.add('active');
+        setAccountsModalOpen(modal, true);
 
         let services = [];
         try {
             services = await api.get('/newapi-services?enabled=true');
         } catch (e) {
+            toast.warning('加载 NEWAPI 服务失败，可自动选择或稍后重试');
             services = [];
         }
 
@@ -1321,24 +1344,45 @@ function selectNewapiService() {
                 item.addEventListener('mouseenter', () => item.style.background = 'var(--surface-hover)');
                 item.addEventListener('mouseleave', () => item.style.background = '');
                 item.addEventListener('click', () => {
-                    cleanup();
-                    resolve({ service_id: parseInt(item.dataset.id) });
+                    settle({ service_id: parseInt(item.dataset.id) });
                 });
             });
         }
 
         function cleanup() {
-            modal.classList.remove('active');
+            setAccountsModalOpen(modal, false);
             closeBtn.removeEventListener('click', onCancel);
             cancelBtn.removeEventListener('click', onCancel);
             autoBtn.removeEventListener('click', onAuto);
+            modal.removeEventListener('click', onBackdropClose);
+            document.removeEventListener('keydown', onEscapeClose);
         }
-        function onCancel() { cleanup(); resolve(null); }
-        function onAuto() { cleanup(); resolve({ service_id: null }); }
+        function settle(value) {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            cleanup();
+            resolve(value);
+        }
+        function onCancel() { settle(null); }
+        function onAuto() { settle({ service_id: null }); }
+        function onBackdropClose(event) {
+            if (event.target === modal) {
+                settle(null);
+            }
+        }
+        function onEscapeClose(event) {
+            if (event.key === 'Escape') {
+                settle(null);
+            }
+        }
 
         closeBtn.addEventListener('click', onCancel);
         cancelBtn.addEventListener('click', onCancel);
         autoBtn.addEventListener('click', onAuto);
+        modal.addEventListener('click', onBackdropClose);
+        document.addEventListener('keydown', onEscapeClose);
     });
 }
 
@@ -1562,7 +1606,7 @@ async function handleCodexAuthLogin() {
     statusEl.textContent = '正在启动 Codex Auth 登录...';
     downloadBtn.style.display = 'none';
     codexAuthResults = [];
-    modal.classList.add('active');
+    setAccountsModalOpen(modal, true);
 
     if (count === 1 && !selectAllPages) {
         // 单账号登录
