@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>访问验证 - OpenAI 注册系统</title>
+    <meta name="description" content="输入访问密码后进入 OpenAI 注册系统控制台。">
     <link rel="stylesheet" href="/static/css/style.css?v={{ static_version }}">
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v={{ static_version }}">
     <style>
@@ -30,14 +31,25 @@
             margin-bottom: var(--spacing-md);
             font-size: 0.875rem;
         }
+        .visually-hidden {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
     </style>
 </head>
 <body>
-    <div class="container">
+    <main class="container">
         <div class="login-wrap">
             <div class="card login-card">
                 <div class="card-header">
-                    <h3 class="login-title">🔒 访问验证</h3>
+                    <h3 class="login-title">访问验证</h3>
                     <span class="hint">请输入访问密码继续</span>
                 </div>
                 <div class="card-body">
@@ -46,6 +58,7 @@
                     {% endif %}
                     <form method="post" action="/login">
                         <input type="hidden" name="next" value="{{ next }}">
+                        <input class="visually-hidden" type="text" name="username" autocomplete="username" tabindex="-1" aria-label="用户名">
                         <div class="form-group">
                             <label for="password">访问密码</label>
                             <input type="password" id="password" name="password" autocomplete="current-password" required autofocus>
@@ -57,6 +70,6 @@
                 </div>
             </div>
         </div>
-    </div>
+    </main>
 </body>
 </html>

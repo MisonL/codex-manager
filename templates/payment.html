@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>支付升级 - OpenAI 注册系统</title>
+    <meta name="description" content="为已注册账号生成 Plus 或 Team 支付链接，并支持复制或无痕打开。">
     <link rel="stylesheet" href="/static/css/style.css?v={{ static_version }}">
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v={{ static_version }}">
     <style>
@@ -20,6 +21,9 @@
             cursor: pointer;
             transition: border-color 0.2s, box-shadow 0.2s;
             text-align: center;
+            width: 100%;
+            background: var(--surface);
+            color: inherit;
         }
         .plan-card:hover {
             border-color: var(--primary-color);
@@ -29,7 +33,7 @@
             box-shadow: 0 0 0 3px rgba(99,102,241,0.15);
         }
         .plan-card h3 { margin: 0 0 8px; font-size: 1.2rem; }
-        .plan-card p  { margin: 0; color: var(--text-secondary); font-size: 0.9rem; }
+        .plan-card p  { margin: 0; color: var(--text-primary); font-size: 0.9rem; }
         .team-options { display: none; }
         .team-options.show { display: block; }
         .link-box {
@@ -88,14 +92,14 @@
                 <div class="card-body">
                     <!-- 套餐选择 -->
                     <div class="plan-cards">
-                        <div class="plan-card selected" id="plan-plus" onclick="selectPlan('plus')">
+                        <button class="plan-card selected" id="plan-plus" type="button" onclick="selectPlan('plus')" aria-pressed="true">
                             <h3>Plus</h3>
                             <p>个人订阅，$20/月</p>
-                        </div>
-                        <div class="plan-card" id="plan-team" onclick="selectPlan('team')">
+                        </button>
+                        <button class="plan-card" id="plan-team" type="button" onclick="selectPlan('team')" aria-pressed="false">
                             <h3>Team</h3>
                             <p>团队订阅，按座位计费</p>
-                        </div>
+                        </button>
                     </div>
 
                     <!-- 账号选择 -->
@@ -115,7 +119,7 @@
                             </select>
                         </div>
                         <div class="form-group">
-                            <label>对应货币</label>
+                            <label for="currency-display">对应货币</label>
                             <input type="text" id="currency-display" value="" readonly style="background:var(--surface-hover);cursor:default">
                         </div>
                     </div>
@@ -148,7 +152,7 @@
 
                     <!-- 链接结果 -->
                     <div class="link-box" id="link-box">
-                        <label>支付链接</label>
+                        <label for="link-text">支付链接</label>
                         <textarea class="link-text" id="link-text" readonly></textarea>
                         <div class="form-actions" style="margin-top:10px">
                             <button class="btn btn-secondary" onclick="copyLink()">复制链接</button>
