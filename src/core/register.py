@@ -676,7 +676,6 @@ class RegistrationEngine:
                 close_email_service()
             except Exception as e:
                 self._log(f"关闭邮箱服务失败: {e}", "warning")
-
     def _get_device_id(self, force_refresh: bool = False) -> Optional[str]:
         """获取 Device ID"""
         if not self.oauth_start:
