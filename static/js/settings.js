@@ -214,6 +214,9 @@ function initEventListeners() {
     if (elements.testAllProxiesBtn) {
         elements.testAllProxiesBtn.addEventListener('click', handleTestAllProxies);
     }
+    if (elements.deleteDisabledProxiesBtn) {
+        elements.deleteDisabledProxiesBtn.addEventListener('click', handleDeleteDisabledProxies);
+    }
 
     if (elements.closeProxyModal) {
         elements.closeProxyModal.addEventListener('click', closeProxyModal);
@@ -810,6 +813,16 @@ async function loadProxies() {
 
 // 渲染代理列表
 function renderProxies(proxies) {
+    const disabledCount = Array.isArray(proxies)
+        ? proxies.filter(proxy => !proxy.enabled).length
+        : 0;
+    if (elements.deleteDisabledProxiesBtn) {
+        elements.deleteDisabledProxiesBtn.disabled = disabledCount === 0;
+        elements.deleteDisabledProxiesBtn.textContent = disabledCount > 0
+            ? `🧹 删除禁用项 (${disabledCount})`
+            : '🧹 删除禁用项';
+    }
+
     if (!proxies || proxies.length === 0) {
         elements.proxiesTable.innerHTML = `
             <tr>
@@ -999,6 +1012,28 @@ async function handleTestAllProxies() {
     } finally {
         elements.testAllProxiesBtn.disabled = false;
         elements.testAllProxiesBtn.textContent = '🔌 测试全部';
+    }
+}
+
+async function handleDeleteDisabledProxies() {
+    if (elements.deleteDisabledProxiesBtn?.disabled) {
+        return;
+    }
+
+    const confirmed = await confirm('确定要删除所有已禁用代理吗？');
+    if (!confirmed) return;
+
+    const button = elements.deleteDisabledProxiesBtn;
+    button.disabled = true;
+    button.innerHTML = '<span class="loading-spinner"></span> 删除中...';
+
+    try {
+        const result = await api.delete('/settings/proxies/disabled');
+        toast.success(result.message || `已删除 ${result.deleted_count || 0} 个禁用代理`);
+        loadProxies();
+    } catch (error) {
+        toast.error('删除失败: ' + error.message);
+        loadProxies();
     }
 }
 
