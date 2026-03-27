@@ -40,6 +40,7 @@ from ..config.settings import get_settings
 logger = logging.getLogger(__name__)
 
 OTP_SECONDARY_TIMEOUT_SECONDS = 120
+OPENAI_AUTH_IMPERSONATE = "chrome"
 PHASE_IP_CHECK = "ip_check"
 PHASE_EMAIL_PREPARE = "email_prepare"
 PHASE_SIGNUP_SUBMIT = "signup_submit"
@@ -275,6 +276,37 @@ class RegistrationEngine:
             self.device_id = None
         return None
 
+    def _remember_pending_continue_url(
+        self,
+        continue_url: Optional[str],
+        *,
+        source: str,
+    ) -> Optional[str]:
+        normalized = str(continue_url or "").strip() or None
+        self._pending_continue_url = normalized
+        if normalized:
+            self._log(f"{source} 记录 continue_url: {normalized[:100]}...")
+            return normalized
+
+        self._log(
+            f"{source} 响应缺少 continue_url，后续将尝试 Cookie 回退",
+            "warning",
+        )
+        return None
+
+    def _create_openai_auth_session(self):
+        config = getattr(self.http_client, "config", None)
+        if config is None:
+            return self.http_client.session
+
+        return cffi_requests.Session(
+            proxies=getattr(self.http_client, "proxies", None),
+            proxy_auth=getattr(self.http_client, "proxy_auth", None),
+            impersonate=OPENAI_AUTH_IMPERSONATE,
+            verify=config.verify_ssl,
+            timeout=config.timeout,
+        )
+
     def _session_get(
         self,
         url: str,
@@ -287,13 +319,8 @@ class RegistrationEngine:
             raise RuntimeError("session not initialized")
 
         request_kwargs = dict(kwargs)
-        request_kwargs.update(
-            self.fingerprint_profile.request_kwargs(
-                url=url,
-                request_kind=request_kind,
-                headers=headers,
-            )
-        )
+        if headers:
+            request_kwargs["headers"] = headers
         return self.session.get(url, **request_kwargs)
 
     def _session_post(
@@ -308,19 +335,19 @@ class RegistrationEngine:
             raise RuntimeError("session not initialized")
 
         request_kwargs = dict(kwargs)
-        request_kwargs.update(
-            self.fingerprint_profile.request_kwargs(
-                url=url,
-                request_kind=request_kind,
-                headers=headers,
-            )
-        )
+        if headers:
+            request_kwargs["headers"] = headers
         return self.session.post(url, **request_kwargs)
 
     def _rebuild_session(self, reason: str) -> None:
         self._log(f"重建 HTTP 会话: {reason}", "warning")
+        if self.session:
+            try:
+                self.session.close()
+            except Exception:
+                pass
         self.http_client.close()
-        self.session = self.http_client.session
+        self.session = self._create_openai_auth_session()
         self.fingerprint_profile = self.http_client.fingerprint_profile
         self._sync_device_id_from_session(clear_when_missing=True)
 
@@ -647,7 +674,12 @@ class RegistrationEngine:
     def _init_session(self) -> bool:
         """初始化会话"""
         try:
-            self.session = self.http_client.session
+            if self.session:
+                try:
+                    self.session.close()
+                except Exception:
+                    pass
+            self.session = self._create_openai_auth_session()
             self.fingerprint_profile = self.http_client.fingerprint_profile
             self._sync_device_id_from_session(clear_when_missing=True)
             return True
@@ -742,17 +774,16 @@ class RegistrationEngine:
             sen_req_body = f'{{"p":"","id":"{device_id}","flow":"authorize_continue"}}'
 
             started_at = time.time()
-            response = self.http_client.post(
+            if not self.session:
+                self.session = self._create_openai_auth_session()
+
+            response = self.session.post(
                 OPENAI_API_ENDPOINTS["sentinel"],
-                headers=self.fingerprint_profile.build_headers(
-                    url=OPENAI_API_ENDPOINTS["sentinel"],
-                    request_kind="api",
-                    headers={
-                        "origin": "https://sentinel.openai.com",
-                        "referer": "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=20260219f9f6",
-                        "content-type": "text/plain;charset=UTF-8",
-                    },
-                ),
+                headers={
+                    "origin": "https://sentinel.openai.com",
+                    "referer": "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=20260219f9f6",
+                    "content-type": "text/plain;charset=UTF-8",
+                },
                 data=sen_req_body,
             )
             self._log_timed_http_result("Sentinel 校验", started_at, response)
@@ -1067,7 +1098,10 @@ class RegistrationEngine:
             )
 
         self._email_verified = True
-        self._pending_continue_url = continue_url or None
+        self._remember_pending_continue_url(
+            continue_url,
+            source="验证码校验",
+        )
         self._log("验证码校验完成，Session 已进入 email_verified 状态")
         return self._complete_phase(
             PHASE_OTP_SECONDARY,
@@ -1605,7 +1639,10 @@ class RegistrationEngine:
                     payload = response.json() or {}
                 except Exception:
                     payload = {}
-                continue_url = str(payload.get("continue_url") or "").strip()
+                continue_url = self._remember_pending_continue_url(
+                    payload.get("continue_url"),
+                    source="登录密码校验",
+                )
                 if continue_url:
                     try:
                         self._emit_status("login_password", "跟进密码校验 continue_url")
@@ -1662,7 +1699,10 @@ class RegistrationEngine:
                 payload = response.json() or {}
             except Exception:
                 payload = {}
-            continue_url = str(payload.get("continue_url") or "").strip() or None
+            continue_url = self._remember_pending_continue_url(
+                payload.get("continue_url"),
+                source="登录密码校验",
+            )
             if continue_url:
                 try:
                     self._session_get(continue_url, request_kind="navigate", timeout=15)
@@ -1842,10 +1882,39 @@ class RegistrationEngine:
                 next_action=PHASE_WORKSPACE_RESOLVE,
             )
 
+        self._emit_status("otp_secondary", "等待登录验证码邮件")
+        code = self._get_verification_code()
+        if not code:
+            return self._complete_phase(
+                PHASE_OAUTH_REENTER,
+                success=False,
+                error_message="登录流程获取验证码失败",
+                retryable=True,
+                next_action=PHASE_WORKSPACE_RESOLVE,
+            )
+
+        valid, consent_url = self._validate_verification_code_and_get_continue_url(code)
+        if not valid:
+            return self._complete_phase(
+                PHASE_OAUTH_REENTER,
+                success=False,
+                error_message="登录流程验证码校验失败",
+                retryable=True,
+                next_action=PHASE_WORKSPACE_RESOLVE,
+            )
+
+        self._remember_pending_continue_url(
+            consent_url,
+            source="登录流程验证码校验",
+        )
+
         return self._complete_phase(
             PHASE_OAUTH_REENTER,
             success=True,
-            metadata={"otp_sent_at": self._otp_sent_at},
+            metadata={
+                "otp_sent_at": self._otp_sent_at,
+                "continue_url": self._pending_continue_url,
+            },
         )
 
     def _phase_workspace_resolve(self) -> PhaseResult:
