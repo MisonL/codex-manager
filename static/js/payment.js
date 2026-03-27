@@ -6,6 +6,14 @@ let selectedPlan = 'plus';
 let generatedLink = '';
 let countryCurrencyMap = {};  // 动态从接口加载
 
+function showToast(message, type = 'info') {
+    if (typeof toast?.show === 'function') {
+        toast.show(message, type);
+        return;
+    }
+    console[type === 'error' ? 'error' : 'log'](message);
+}
+
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
     loadAccounts();
@@ -77,8 +85,12 @@ function onCountryChange() {
 // 选择套餐
 function selectPlan(plan) {
     selectedPlan = plan;
-    document.getElementById('plan-plus').classList.toggle('selected', plan === 'plus');
-    document.getElementById('plan-team').classList.toggle('selected', plan === 'team');
+    const plusCard = document.getElementById('plan-plus');
+    const teamCard = document.getElementById('plan-team');
+    plusCard.classList.toggle('selected', plan === 'plus');
+    teamCard.classList.toggle('selected', plan === 'team');
+    plusCard.setAttribute('aria-pressed', String(plan === 'plus'));
+    teamCard.setAttribute('aria-pressed', String(plan === 'team'));
     document.getElementById('team-options').classList.toggle('show', plan === 'team');
     // 隐藏已生成的链接
     document.getElementById('link-box').classList.remove('show');
@@ -89,7 +101,7 @@ function selectPlan(plan) {
 async function generateLink() {
     const accountId = document.getElementById('account-select').value;
     if (!accountId) {
-        ui.showToast('请先选择账号', 'warning');
+        showToast('请先选择账号', 'warning');
         return;
     }
 
@@ -122,12 +134,12 @@ async function generateLink() {
             document.getElementById('link-text').value = data.link;
             document.getElementById('link-box').classList.add('show');
             document.getElementById('open-status').textContent = '';
-            ui.showToast('支付链接生成成功', 'success');
+            showToast('支付链接生成成功', 'success');
         } else {
-            ui.showToast(data.detail || '生成链接失败', 'error');
+            showToast(data.detail || '生成链接失败', 'error');
         }
     } catch (e) {
-        ui.showToast('请求失败: ' + e.message, 'error');
+        showToast('请求失败: ' + e.message, 'error');
     } finally {
         if (btn) { btn.disabled = false; btn.textContent = '生成支付链接'; }
     }
@@ -137,19 +149,19 @@ async function generateLink() {
 function copyLink() {
     if (!generatedLink) return;
     navigator.clipboard.writeText(generatedLink).then(() => {
-        ui.showToast('已复制到剪贴板', 'success');
+        showToast('已复制到剪贴板', 'success');
     }).catch(() => {
         const ta = document.getElementById('link-text');
         ta.select();
         document.execCommand('copy');
-        ui.showToast('已复制到剪贴板', 'success');
+        showToast('已复制到剪贴板', 'success');
     });
 }
 
 // 无痕打开浏览器（携带账号 cookie）
 async function openIncognito() {
     if (!generatedLink) {
-        ui.showToast('请先生成链接', 'warning');
+        showToast('请先生成链接', 'warning');
         return;
     }
     const accountId = document.getElementById('account-select').value;
@@ -167,13 +179,13 @@ async function openIncognito() {
         const data = await resp.json();
         if (data.success) {
             statusEl.textContent = '已在无痕模式打开浏览器';
-            ui.showToast('无痕浏览器已打开', 'success');
+            showToast('无痕浏览器已打开', 'success');
         } else {
             statusEl.textContent = data.message || '未找到可用浏览器，请手动复制链接';
-            ui.showToast(data.message || '未找到浏览器', 'warning');
+            showToast(data.message || '未找到浏览器', 'warning');
         }
     } catch (e) {
         statusEl.textContent = '请求失败: ' + e.message;
-        ui.showToast('请求失败', 'error');
+        showToast('请求失败', 'error');
     }
 }

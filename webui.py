@@ -41,20 +41,23 @@ def _load_dotenv():
                 os.environ[key] = value
 
 
-def setup_application():
-    """设置应用程序"""
-    # 加载 .env 文件（优先级低于已有环境变量）
+def _prepare_runtime_environment():
+    """准备运行时目录与环境变量。"""
     _load_dotenv()
 
-    # 确保数据目录和日志目录在可执行文件所在目录（打包后也适用）
     data_dir = project_root / "data"
     logs_dir = project_root / "logs"
     data_dir.mkdir(exist_ok=True)
     logs_dir.mkdir(exist_ok=True)
 
-    # 将数据目录路径注入环境变量，供数据库配置使用
     os.environ.setdefault("APP_DATA_DIR", str(data_dir))
     os.environ.setdefault("APP_LOGS_DIR", str(logs_dir))
+    return data_dir, logs_dir
+
+
+def setup_application():
+    """设置应用程序"""
+    data_dir, logs_dir = _prepare_runtime_environment()
 
     # 初始化数据库（必须先于获取设置）
     try:
@@ -82,7 +85,7 @@ def setup_application():
     return settings
 
 
-def start_webui():
+def start_webui(reload_enabled: bool = False):
     """启动 Web UI"""
     # 设置应用程序
     settings = setup_application()
@@ -92,10 +95,10 @@ def start_webui():
 
     # 配置 uvicorn
     uvicorn_config = {
-        "app": "src.web.app:app",
+        "app": "src.web.app:app" if reload_enabled else app,
         "host": settings.webui_host,
         "port": settings.webui_port,
-        "reload": settings.debug,
+        "reload": reload_enabled,
         "log_level": "info" if settings.debug else "warning",
         "access_log": settings.debug,
         "ws": "websockets",
@@ -104,6 +107,7 @@ def start_webui():
     logger = logging.getLogger(__name__)
     logger.info(f"启动 Web UI 在 http://{settings.webui_host}:{settings.webui_port}")
     logger.info(f"调试模式: {settings.debug}")
+    logger.info(f"热重载: {reload_enabled}")
 
     # 启动服务器
     uvicorn.run(**uvicorn_config)
@@ -122,6 +126,14 @@ def main():
     parser.add_argument("--log-level", help="日志级别 (也可通过 LOG_LEVEL 环境变量设置)")
     parser.add_argument("--access-password", help="Web UI 访问密钥 (也可通过 WEBUI_ACCESS_PASSWORD 环境变量设置)")
     args = parser.parse_args()
+
+    _prepare_runtime_environment()
+
+    try:
+        initialize_database()
+    except Exception as e:
+        print(f"数据库初始化失败: {e}")
+        raise
 
     # 更新配置
     from src.config.settings import update_settings
@@ -144,7 +156,7 @@ def main():
     log_level = args.log_level or os.environ.get("LOG_LEVEL")
     if log_level:
         updates["log_level"] = log_level
-        
+
     access_password = args.access_password or os.environ.get("WEBUI_ACCESS_PASSWORD")
     if access_password:
         updates["webui_access_password"] = access_password
@@ -152,8 +164,10 @@ def main():
     if updates:
         update_settings(**updates)
 
+    reload_enabled = args.reload or os.environ.get("WEBUI_RELOAD", "").lower() in ("1", "true", "yes")
+
     # 启动 Web UI
-    start_webui()
+    start_webui(reload_enabled=reload_enabled)
 
 
 if __name__ == "__main__":

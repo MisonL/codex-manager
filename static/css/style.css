@@ -6,10 +6,10 @@
 /* CSS 变量 - 亮色主题 */
 :root {
     /* 主色调 */
-    --primary-color: #10a37f;
-    --primary-hover: #0d8a6a;
-    --primary-light: rgba(16, 163, 127, 0.1);
-    --primary-dark: #0a7d5e;
+    --primary-color: #0b7a60;
+    --primary-hover: #095f4b;
+    --primary-light: rgba(11, 122, 96, 0.1);
+    --primary-dark: #074738;
 
     /* 语义色 */
     --danger-color: #ef4444;
@@ -32,8 +32,8 @@
 
     /* 文字色 */
     --text-primary: #0f172a;
-    --text-secondary: #64748b;
-    --text-muted: #94a3b8;
+    --text-secondary: #475569;
+    --text-muted: #64748b;
 
     /* 阴影 */
     --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
@@ -96,8 +96,8 @@
     --border-light: #1e293b;
 
     --text-primary: #f1f5f9;
-    --text-secondary: #94a3b8;
-    --text-muted: #64748b;
+    --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8;
     --navbar-background: #111827;
 
     --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
