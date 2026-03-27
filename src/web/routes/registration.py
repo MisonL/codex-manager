@@ -113,6 +113,23 @@ def _build_codex_auth_hook_payload(auth_result) -> Dict[str, Any]:
     return payload
 
 
+def _result_metadata_bucket(result: RegistrationResult) -> Dict[str, Any]:
+    metadata = dict(result.metadata or {})
+    result.metadata = metadata
+    return metadata
+
+
+def _record_postprocess_state(
+    result: RegistrationResult,
+    key: str,
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    metadata = _result_metadata_bucket(result)
+    postprocess = metadata.setdefault("postprocess", {})
+    postprocess[key] = payload
+    return payload
+
+
 def _run_codex_official_auth_hook(
     db,
     *,
@@ -131,6 +148,11 @@ def _run_codex_official_auth_hook(
             "reason": "missing_password",
         }
         result.metadata = metadata
+        _record_postprocess_state(
+            result,
+            "codex_auth",
+            dict(metadata["codex_auth_hook"]),
+        )
         log_callback("[Codex Auth] 跳过官方授权: 账号缺少密码")
         return saved_account
 
@@ -149,6 +171,11 @@ def _run_codex_official_auth_hook(
 
     metadata["codex_auth_hook"] = _build_codex_auth_hook_payload(auth_result)
     result.metadata = metadata
+    _record_postprocess_state(
+        result,
+        "codex_auth",
+        dict(metadata["codex_auth_hook"]),
+    )
 
     extra_data = dict(saved_account.extra_data or {})
     extra_data["codex_auth_hook"] = dict(metadata["codex_auth_hook"])
@@ -904,6 +931,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                         log_callback(f"[TM] 上传异常: {tm_err}")
 
                 if auto_upload_newapi:
+                    newapi_results = []
                     try:
                         from ...core.upload.newapi_upload import upload_to_newapi
                         if saved_account and saved_account.access_token:
@@ -911,6 +939,11 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                             if not _na_ids:
                                 _na_ids = [s.id for s in crud.get_newapi_services(db, enabled=True)]
                             if not _na_ids:
+                                newapi_results.append({
+                                    "success": False,
+                                    "skipped": True,
+                                    "reason": "no_enabled_services",
+                                })
                                 log_callback("[NEWAPI] 无可用 NEWAPI 服务，跳过上传")
                             for _sid in _na_ids:
                                 try:
@@ -926,6 +959,13 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                                         channel_base_url=_svc.channel_base_url,
                                         channel_models=_svc.channel_models,
                                     )
+                                    newapi_results.append({
+                                        "service_id": _sid,
+                                        "service_name": _svc.name,
+                                        "success": _ok,
+                                        "error_message": "" if _ok else _msg,
+                                        "channel_type": _svc.channel_type,
+                                    })
                                     if _ok:
                                         saved_account.newapi_uploaded = True
                                         saved_account.newapi_uploaded_at = datetime.utcnow()
@@ -934,9 +974,32 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                                     else:
                                         log_callback(f"[NEWAPI] 上传失败({_svc.name}): {_msg}")
                                 except Exception as _e:
+                                    newapi_results.append({
+                                        "service_id": _sid,
+                                        "success": False,
+                                        "error_message": str(_e),
+                                    })
                                     log_callback(f"[NEWAPI] 异常({_sid}): {_e}")
+                        else:
+                            newapi_results.append({
+                                "success": False,
+                                "skipped": True,
+                                "reason": "missing_access_token",
+                            })
+                            log_callback("[NEWAPI] 账号缺少 access_token，跳过上传")
                     except Exception as na_err:
+                        newapi_results.append({
+                            "success": False,
+                            "error_message": str(na_err),
+                            "stage": "newapi_upload_block",
+                        })
                         log_callback(f"[NEWAPI] 上传异常: {na_err}")
+                    if newapi_results:
+                        _record_postprocess_state(
+                            result,
+                            "newapi",
+                            {"attempts": newapi_results},
+                        )
 
                 # 更新任务状态
                 crud.update_registration_task(
