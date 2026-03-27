@@ -304,8 +304,17 @@
                                 <div class="form-group" id="auto-upload-group">
                                     <label style="font-weight: 500; margin-bottom: var(--spacing-xs); display: block;">注册后自动操作</label>
 
+                                    <!-- Codex Auth -->
+                                    <label
+                                        style="display: flex; align-items: center; gap: var(--spacing-sm); cursor: pointer;"
+                                        title="注册成功后自动获取官方 Refresh Token，防止 401"
+                                    >
+                                        <input type="checkbox" id="auto-codex-auth">
+                                        <span>自动官方授权 (Codex Auth)</span>
+                                    </label>
+
                                     <!-- CPA -->
-                                    <label style="display: flex; align-items: center; gap: var(--spacing-sm); cursor: pointer;">
+                                    <label style="display: flex; align-items: center; gap: var(--spacing-sm); cursor: pointer; margin-top: 6px;">
                                         <input type="checkbox" id="auto-upload-cpa">
                                         <span>上传到 CPA</span>
                                     </label>

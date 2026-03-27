@@ -93,6 +93,7 @@ const elements = {
     concurrencyHint: document.getElementById('concurrency-hint'),
     intervalGroup: document.getElementById('interval-group'),
     // 注册后自动操作
+    autoCodexAuth: document.getElementById('auto-codex-auth'),
     autoUploadCpa: document.getElementById('auto-upload-cpa'),
     cpaServiceSelectGroup: document.getElementById('cpa-service-select-group'),
     cpaServiceSelect: document.getElementById('cpa-service-select'),
@@ -619,6 +620,7 @@ async function handleStartRegistration(e) {
     // 构建请求数据（代理从设置中自动获取）
     const requestData = {
         email_service_type: emailServiceType,
+        auto_codex_auth: elements.autoCodexAuth ? elements.autoCodexAuth.checked : false,
         auto_upload_cpa: elements.autoUploadCpa ? elements.autoUploadCpa.checked : false,
         cpa_service_ids: elements.autoUploadCpa && elements.autoUploadCpa.checked ? getSelectedServiceIds(elements.cpaServiceSelect) : [],
         auto_upload_sub2api: elements.autoUploadSub2api ? elements.autoUploadSub2api.checked : false,
@@ -1334,6 +1336,7 @@ async function handleOutlookBatchRegistration() {
         interval_max: intervalMax,
         concurrency: Math.min(50, Math.max(1, concurrency)),
         mode: mode,
+        auto_codex_auth: elements.autoCodexAuth ? elements.autoCodexAuth.checked : false,
         auto_upload_cpa: elements.autoUploadCpa ? elements.autoUploadCpa.checked : false,
         cpa_service_ids: elements.autoUploadCpa && elements.autoUploadCpa.checked ? getSelectedServiceIds(elements.cpaServiceSelect) : [],
         auto_upload_sub2api: elements.autoUploadSub2api ? elements.autoUploadSub2api.checked : false,

@@ -8,6 +8,7 @@ import sys
 import secrets
 import hmac
 import hashlib
+import time
 from typing import Optional
 from pathlib import Path
 
@@ -64,6 +65,7 @@ def create_app() -> FastAPI:
         docs_url="/api/docs" if settings.debug else None,
         redoc_url="/api/redoc" if settings.debug else None,
     )
+    app.state.started_at = time.time()
 
     # CORS 中间件
     app.add_middleware(

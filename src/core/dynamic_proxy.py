@@ -7,6 +7,8 @@ import logging
 import re
 from typing import Optional
 
+from .fingerprint import get_fingerprint_profile
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,12 +31,19 @@ def fetch_dynamic_proxy(api_url: str, api_key: str = "", api_key_header: str = "
         headers = {}
         if api_key:
             headers[api_key_header] = api_key
+        profile = get_fingerprint_profile()
 
         response = cffi_requests.get(
             api_url,
-            headers=headers,
+            headers=profile.build_headers(
+                url=api_url,
+                request_kind="api",
+                headers=headers,
+            ),
             timeout=10,
-            impersonate="chrome110"
+            impersonate=profile.impersonate,
+            extra_fp=profile.extra_fp(),
+            default_headers=False,
         )
 
         if response.status_code != 200:

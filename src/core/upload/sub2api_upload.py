@@ -12,6 +12,7 @@ from curl_cffi import requests as cffi_requests
 
 from ...database.session import get_db
 from ...database.models import Account
+from ..fingerprint import DEFAULT_BROWSER_IMPERSONATE
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +113,7 @@ def upload_to_sub2api(
             headers=headers,
             proxies=None,
             timeout=30,
-            impersonate="chrome110",
+            impersonate=DEFAULT_BROWSER_IMPERSONATE,
         )
 
         if response.status_code in (200, 201):
@@ -204,7 +205,7 @@ def test_sub2api_connection(api_url: str, api_key: str) -> Tuple[bool, str]:
             headers=headers,
             proxies=None,
             timeout=10,
-            impersonate="chrome110",
+            impersonate=DEFAULT_BROWSER_IMPERSONATE,
         )
 
         if response.status_code in (200, 201, 204, 405):

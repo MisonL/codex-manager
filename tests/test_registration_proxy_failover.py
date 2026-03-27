@@ -55,7 +55,15 @@ def test_run_sync_registration_task_disables_bad_proxy_and_retries(monkeypatch, 
     saved_results = []
 
     class FakeRegistrationEngine:
-        def __init__(self, email_service, proxy_url=None, callback_logger=None, status_callback=None, task_uuid=None):
+        def __init__(
+            self,
+            email_service,
+            proxy_url=None,
+            callback_logger=None,
+            status_callback=None,
+            task_uuid=None,
+            **kwargs,
+        ):
             self.proxy_url = proxy_url
 
         def run(self):

@@ -36,8 +36,9 @@ class LoginEngine(RegistrationEngine):
             for i in range(max_redirects):
                 self._log(f"重定向 {i+1}/{max_redirects}: {current_url[:100]}...")
 
-                response = self.session.get(
+                response = self._session_get(
                     current_url,
+                    request_kind="navigate",
                     allow_redirects=False,
                     timeout=15
                 )
@@ -87,8 +88,9 @@ class LoginEngine(RegistrationEngine):
                 )
                 headers["openai-sentinel-token"] = sentinel
 
-            response = self.session.post(
+            response = self._session_post(
                 OPENAI_API_ENDPOINTS["signup"],
+                request_kind="api",
                 headers=headers,
                 data=login_body,
             )
@@ -105,8 +107,9 @@ class LoginEngine(RegistrationEngine):
         """发送验证码"""
         try:
             self._otp_sent_at = time.time()
-            response = self.session.post(
+            response = self._session_post(
                 OPENAI_API_ENDPOINTS["passwordless_send_otp"],
+                request_kind="api",
                 headers={
                     "referer": "https://auth.openai.com/log-in/password",
                     "accept": "application/json"
@@ -174,8 +177,9 @@ class LoginEngine(RegistrationEngine):
         try:
             select_body = f'{{"workspace_id":"{workspace_id}"}}'
 
-            response = self.session.post(
+            response = self._session_post(
                 OPENAI_API_ENDPOINTS["select_workspace"],
+                request_kind="api",
                 headers={
                     "referer": "https://auth.openai.com/sign-in-with-chatgpt/codex/consent",
                     "content-type": "application/json",
@@ -209,8 +213,9 @@ class LoginEngine(RegistrationEngine):
             for i in range(max_redirects):
                 self._log(f"重定向 {i+1}/{max_redirects}: {current_url[:100]}...")
 
-                response = self.session.get(
+                response = self._session_get(
                     current_url,
+                    request_kind="navigate",
                     allow_redirects=False,
                     timeout=15
                 )

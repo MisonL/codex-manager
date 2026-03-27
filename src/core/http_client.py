@@ -8,15 +8,72 @@ import json
 from typing import Optional, Dict, Any, Union, Tuple
 from dataclasses import dataclass
 import logging
+import re
+from urllib.parse import unquote, urlsplit
 
 from curl_cffi import requests as cffi_requests
 from curl_cffi.requests import Session, Response
+from curl_cffi.requests.exceptions import (
+    ConnectionError as CurlConnectionError,
+    ProxyError as CurlProxyError,
+    RequestException as CurlRequestException,
+    Timeout as CurlTimeout,
+)
 
 from ..config.constants import ERROR_MESSAGES
 from ..config.settings import get_settings
+from .fingerprint import (
+    DEFAULT_BROWSER_IMPERSONATE,
+    FingerprintProfile,
+    get_fingerprint_profile,
+)
 
 
 logger = logging.getLogger(__name__)
+BLOCKED_COUNTRY_CODES = {"CN", "HK", "MO"}
+
+
+def _split_proxy_credentials(proxy_url: Optional[str]) -> Tuple[Optional[str], Optional[Tuple[str, str]]]:
+    raw_proxy_url = str(proxy_url or "").strip()
+    if not raw_proxy_url:
+        return None, None
+
+    parsed = urlsplit(raw_proxy_url)
+    if not parsed.scheme or not parsed.hostname:
+        return raw_proxy_url, None
+
+    username = parsed.username
+    password = parsed.password
+    host = parsed.hostname
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    sanitized_proxy_url = f"{parsed.scheme}://{host}{port}"
+
+    if username is None:
+        return sanitized_proxy_url, None
+
+    return sanitized_proxy_url, (unquote(username), unquote(password or ""))
+
+
+def _redact_proxy_url(proxy_url: Optional[str]) -> str:
+    raw_proxy_url = str(proxy_url or "").strip()
+    if not raw_proxy_url:
+        return ""
+
+    parsed = urlsplit(raw_proxy_url)
+    if not parsed.scheme or not parsed.hostname:
+        return raw_proxy_url
+
+    host = parsed.hostname
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    port = f":{parsed.port}" if parsed.port is not None else ""
+
+    if parsed.username is None:
+        return f"{parsed.scheme}://{host}{port}"
+
+    return f"{parsed.scheme}://{unquote(parsed.username)}:***@{host}{port}"
 
 
 @dataclass
@@ -25,7 +82,7 @@ class RequestConfig:
     timeout: int = 30
     max_retries: int = 3
     retry_delay: float = 1.0
-    impersonate: str = "chrome"
+    impersonate: str = DEFAULT_BROWSER_IMPERSONATE
     verify_ssl: bool = True
     follow_redirects: bool = True
 
@@ -55,9 +112,11 @@ class HTTPClient:
             config: 请求配置
             session: 可重用的会话对象
         """
-        self.proxy_url = proxy_url
+        self.raw_proxy_url = str(proxy_url or "").strip() or None
+        self.proxy_url, self.proxy_auth = _split_proxy_credentials(proxy_url)
         self.config = config or RequestConfig()
         self._session = session
+        self.fingerprint_profile: FingerprintProfile = get_fingerprint_profile(proxy_url)
 
     @property
     def proxies(self) -> Optional[Dict[str, str]]:
@@ -75,9 +134,11 @@ class HTTPClient:
         if self._session is None:
             self._session = Session(
                 proxies=self.proxies,
-                impersonate=self.config.impersonate,
-                verify=self.config.verify_ssl,
-                timeout=self.config.timeout
+                proxy_auth=self.proxy_auth,
+                **self.fingerprint_profile.session_kwargs(
+                    timeout=self.config.timeout,
+                    verify=self.config.verify_ssl,
+                ),
             )
         return self._session
 
@@ -101,15 +162,28 @@ class HTTPClient:
         Raises:
             HTTPClientError: 请求失败
         """
+        request_headers = self.fingerprint_profile.session_headers()
+        if "headers" in kwargs and kwargs["headers"]:
+            request_headers.update(
+                {str(key).lower(): value for key, value in kwargs["headers"].items()}
+            )
+        kwargs["headers"] = request_headers
+
         # 设置默认参数
         kwargs.setdefault("timeout", self.config.timeout)
         kwargs.setdefault("allow_redirects", self.config.follow_redirects)
+        kwargs.setdefault("impersonate", self.fingerprint_profile.impersonate)
+        kwargs.setdefault("extra_fp", self.fingerprint_profile.extra_fp())
+        kwargs.setdefault("default_headers", False)
 
         # 添加代理配置
         if self.proxies and "proxies" not in kwargs:
             kwargs["proxies"] = self.proxies
+        if self.proxy_auth and "proxy_auth" not in kwargs:
+            kwargs["proxy_auth"] = self.proxy_auth
 
         last_exception = None
+        last_error_message = ""
         for attempt in range(self.config.max_retries):
             try:
                 response = self.session.request(method, url, **kwargs)
@@ -128,8 +202,21 @@ class HTTPClient:
 
                 return response
 
-            except (cffi_requests.RequestsError, ConnectionError, TimeoutError) as e:
+            except (CurlRequestException, ConnectionError, TimeoutError) as e:
                 last_exception = e
+                if isinstance(
+                    e,
+                    (CurlProxyError, CurlConnectionError, CurlTimeout, ConnectionError, TimeoutError),
+                ):
+                    if self.proxy_url:
+                        last_error_message = (
+                            f"无法通过代理 [{_redact_proxy_url(self.raw_proxy_url or self.proxy_url)}] "
+                            f"连接到服务 [{url}]: {e}"
+                        )
+                    else:
+                        last_error_message = f"连接到服务 [{url}] 失败: {e}"
+                else:
+                    last_error_message = f"请求失败: {method} {url} - {e}"
                 logger.warning(
                     f"请求失败: {method} {url} (attempt {attempt + 1}/{self.config.max_retries}): {e}"
                 )
@@ -140,7 +227,7 @@ class HTTPClient:
                     break
 
         raise HTTPClientError(
-            f"请求失败，最大重试次数已达: {method} {url} - {last_exception}"
+            last_error_message or f"请求失败，最大重试次数已达: {method} {url} - {last_exception}"
         )
 
     def get(self, url: str, **kwargs) -> Response:
@@ -254,15 +341,11 @@ class OpenAIHTTPClient(HTTPClient):
 
         # 默认请求头
         self.default_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "keep-alive",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-site",
+            **self.fingerprint_profile.build_headers(
+                url="https://api.openai.com",
+                request_kind="api",
+            ),
+            "connection": "keep-alive",
         }
 
     def check_ip_location(self) -> Tuple[bool, Optional[str]]:
@@ -272,23 +355,88 @@ class OpenAIHTTPClient(HTTPClient):
         Returns:
             Tuple[是否支持, 位置信息]
         """
-        try:
-            response = self.get("https://cloudflare.com/cdn-cgi/trace", timeout=10)
-            trace_text = response.text
+        attempt_errors = []
 
-            # 解析位置信息
-            import re
-            loc_match = re.search(r"loc=([A-Z]+)", trace_text)
-            loc = loc_match.group(1) if loc_match else None
+        for service_name, checker in (
+            ("ip-api.com", self._check_ip_location_with_ip_api),
+            ("ifconfig.me/all.json", self._check_ip_location_with_ifconfig),
+            ("cloudflare.com/cdn-cgi/trace", self._check_ip_location_with_cloudflare),
+        ):
+            try:
+                supported, location = checker()
+                return supported, location
+            except HTTPClientError as exc:
+                attempt_errors.append(self._format_geo_service_error(service_name, exc))
 
-            # 检查是否支持
-            if loc in ["CN", "HK", "MO"]:
-                return False, loc
-            return True, loc
+        error_message = "; ".join(attempt_errors) if attempt_errors else "IP 地理位置检查失败"
+        logger.error(f"检查 IP 地理位置失败: {error_message}")
+        raise HTTPClientError(error_message)
 
-        except Exception as e:
-            logger.error(f"检查 IP 地理位置失败: {e}")
-            return False, None
+    def _format_geo_service_error(self, service_name: str, error: Exception) -> str:
+        detail = str(error)
+        redacted_proxy_url = _redact_proxy_url(self.raw_proxy_url or self.proxy_url)
+        if redacted_proxy_url:
+            return f"无法通过代理 [{redacted_proxy_url}] 连接到地理位置服务 [{service_name}]: {detail}"
+        return f"无法连接到地理位置服务 [{service_name}]: {detail}"
+
+    def _check_ip_location_with_ip_api(self) -> Tuple[bool, str]:
+        response = self.get(
+            "http://ip-api.com/json/?fields=status,message,country,countryCode,query",
+            timeout=10,
+        )
+        payload = response.json()
+        if payload.get("status") != "success":
+            message = payload.get("message") or "未知错误"
+            raise HTTPClientError(f"ip-api.com 返回失败状态: {message}")
+        return self._build_ip_location_result(
+            country_code=payload.get("countryCode"),
+            country_name=payload.get("country"),
+            source="ip-api.com",
+        )
+
+    def _check_ip_location_with_ifconfig(self) -> Tuple[bool, str]:
+        response = self.get("https://ifconfig.me/all.json", timeout=10)
+        payload = response.json()
+        country_code = payload.get("country_code") or payload.get("countryCode") or payload.get("country_iso")
+        if not country_code:
+            public_ip = payload.get("ip_addr") or payload.get("ip")
+            detail = "ifconfig.me/all.json 响应缺少国家字段"
+            if public_ip:
+                detail = f"{detail}，出口 IP: {public_ip}"
+            raise HTTPClientError(detail)
+        return self._build_ip_location_result(
+            country_code=country_code,
+            country_name=payload.get("country"),
+            source="ifconfig.me/all.json",
+        )
+
+    def _check_ip_location_with_cloudflare(self) -> Tuple[bool, str]:
+        response = self.get("https://cloudflare.com/cdn-cgi/trace", timeout=10)
+        trace_text = response.text
+        loc_match = re.search(r"loc=([A-Z]+)", trace_text)
+        if not loc_match:
+            raise HTTPClientError("cloudflare trace 响应缺少 loc 字段")
+        return self._build_ip_location_result(
+            country_code=loc_match.group(1),
+            country_name=None,
+            source="cloudflare.com/cdn-cgi/trace",
+        )
+
+    def _build_ip_location_result(
+        self,
+        *,
+        country_code: Optional[str],
+        country_name: Optional[str],
+        source: str,
+    ) -> Tuple[bool, str]:
+        code = str(country_code or "").strip().upper()
+        if not code:
+            raise HTTPClientError(f"{source} 响应缺少国家代码")
+
+        location = code if not country_name else f"{country_name} ({code})"
+        if code in BLOCKED_COUNTRY_CODES:
+            return False, location
+        return True, location
 
     def send_openai_request(
         self,
@@ -316,16 +464,20 @@ class OpenAIHTTPClient(HTTPClient):
         Raises:
             HTTPClientError: 请求失败
         """
-        # 合并请求头
-        request_headers = self.default_headers.copy()
+        header_overrides: Dict[str, str] = {}
         if headers:
-            request_headers.update(headers)
+            header_overrides.update(headers)
 
-        # 设置 Content-Type
-        if json_data is not None and "Content-Type" not in request_headers:
-            request_headers["Content-Type"] = "application/json"
-        elif data is not None and "Content-Type" not in request_headers:
-            request_headers["Content-Type"] = "application/x-www-form-urlencoded"
+        if json_data is not None and "Content-Type" not in header_overrides:
+            header_overrides["Content-Type"] = "application/json"
+        elif data is not None and "Content-Type" not in header_overrides:
+            header_overrides["Content-Type"] = "application/x-www-form-urlencoded"
+
+        request_headers = self.fingerprint_profile.build_headers(
+            url=endpoint,
+            request_kind="api",
+            headers=header_overrides,
+        )
 
         try:
             response = self.request(
@@ -367,11 +519,15 @@ class OpenAIHTTPClient(HTTPClient):
 
             response = self.post(
                 OPENAI_API_ENDPOINTS["sentinel"],
-                headers={
-                    "origin": "https://sentinel.openai.com",
-                    "referer": "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=20260219f9f6",
-                    "content-type": "text/plain;charset=UTF-8",
-                },
+                headers=self.fingerprint_profile.build_headers(
+                    url=OPENAI_API_ENDPOINTS["sentinel"],
+                    request_kind="api",
+                    headers={
+                        "origin": "https://sentinel.openai.com",
+                        "referer": "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=20260219f9f6",
+                        "content-type": "text/plain;charset=UTF-8",
+                    },
+                ),
                 data=sen_req_body,
             )
 

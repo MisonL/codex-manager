@@ -32,6 +32,7 @@ _ws_sent_index: Dict[str, Dict] = defaultdict(dict)
 
 # 任务状态
 _task_status: Dict[str, dict] = {}
+_task_status_lock = threading.Lock()
 
 # 任务取消标志
 _task_cancelled: Dict[str, bool] = {}
@@ -200,9 +201,10 @@ class TaskManager:
     ):
         """将数据库中的任务快照回填到内存态，便于重连恢复。"""
         if status:
-            current_status = _task_status.get(task_uuid, {}).copy()
-            current_status.update(status)
-            _task_status[task_uuid] = current_status
+            with _task_status_lock:
+                current_status = _task_status.get(task_uuid, {}).copy()
+                current_status.update(status)
+                _task_status[task_uuid] = current_status
 
         if logs is not None:
             with _get_log_lock(task_uuid):
@@ -212,11 +214,12 @@ class TaskManager:
 
     def update_status(self, task_uuid: str, status: str, **kwargs):
         """更新任务状态"""
-        if task_uuid not in _task_status:
-            _task_status[task_uuid] = {}
+        with _task_status_lock:
+            if task_uuid not in _task_status:
+                _task_status[task_uuid] = {}
 
-        _task_status[task_uuid]["status"] = status
-        _task_status[task_uuid].update(kwargs)
+            _task_status[task_uuid]["status"] = status
+            _task_status[task_uuid].update(kwargs)
 
         if self._loop and self._loop.is_running():
             try:
@@ -229,7 +232,9 @@ class TaskManager:
 
     def get_status(self, task_uuid: str) -> Optional[dict]:
         """获取任务状态"""
-        return _task_status.get(task_uuid)
+        with _task_status_lock:
+            status = _task_status.get(task_uuid)
+            return status.copy() if status is not None else None
 
     def cleanup_task(self, task_uuid: str):
         """清理任务数据"""
@@ -421,6 +426,51 @@ class TaskManager:
         def callback() -> bool:
             return self.is_cancelled(task_uuid)
         return callback
+
+    def snapshot(self) -> dict:
+        """返回任务管理器的观测快照，供健康检查和调试使用。"""
+        active_task_statuses = {"pending", "running", "cancelling"}
+        finished_task_statuses = {"completed", "failed", "cancelled"}
+        active_batch_statuses = {"running", "cancelling"}
+
+        with _task_status_lock:
+            task_status_snapshot = {
+                task_uuid: status.copy()
+                for task_uuid, status in _task_status.items()
+            }
+
+        batch_status_snapshot = {
+            batch_id: self.get_batch_status(batch_id) or {}
+            for batch_id in list(_batch_status.keys())
+        }
+
+        active_tasks = [
+            task_uuid
+            for task_uuid, status in task_status_snapshot.items()
+            if status.get("status") in active_task_statuses
+        ]
+        active_batches = [
+            batch_id
+            for batch_id, status in batch_status_snapshot.items()
+            if status.get("status") in active_batch_statuses and not status.get("finished", False)
+        ]
+
+        return {
+            "active_task_count": len(active_tasks),
+            "active_tasks": active_tasks,
+            "tracked_task_count": len(task_status_snapshot),
+            "finished_task_count": sum(
+                1
+                for status in task_status_snapshot.values()
+                if status.get("status") in finished_task_statuses
+            ),
+            "active_batch_count": len(active_batches),
+            "active_batches": active_batches,
+            "tracked_batch_count": len(batch_status_snapshot),
+            "websocket_connection_count": sum(len(connections) for connections in _ws_connections.values()),
+            "log_buffer_count": len(_log_queues),
+            "max_worker_count": getattr(self.executor, "_max_workers", None),
+        }
 
 
 # 全局实例

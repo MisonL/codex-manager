@@ -17,6 +17,7 @@ from datetime import datetime
 from curl_cffi import requests as cffi_requests
 
 from .openai.oauth import OAuthManager, OAuthStart
+from .fingerprint import FingerprintProfile
 from .http_client import OpenAIHTTPClient, HTTPClientError
 from ..services import EmailServiceFactory, BaseEmailService, EmailServiceType
 from ..services.base import EmailProviderBackoffState
@@ -25,6 +26,7 @@ from ..database.session import get_db
 from ..config.constants import (
     OPENAI_API_ENDPOINTS,
     OPENAI_PAGE_TYPES,
+    calculate_age_from_birthdate,
     generate_random_user_info,
     OTP_CODE_PATTERN,
     DEFAULT_PASSWORD_LENGTH,
@@ -38,10 +40,19 @@ from ..config.settings import get_settings
 logger = logging.getLogger(__name__)
 
 OTP_SECONDARY_TIMEOUT_SECONDS = 120
+PHASE_IP_CHECK = "ip_check"
 PHASE_EMAIL_PREPARE = "email_prepare"
+PHASE_SIGNUP_SUBMIT = "signup_submit"
+PHASE_SIGNUP_PASSWORD = "signup_password"
+PHASE_OTP_PRIMARY = "otp_primary"
 PHASE_OTP_SECONDARY = "otp_secondary"
+PHASE_ACCOUNT_CREATE = "account_create"
+PHASE_OAUTH_REENTER = "oauth_reenter"
+PHASE_WORKSPACE_RESOLVE = "workspace_resolve"
+PHASE_OAUTH_CALLBACK = "oauth_callback"
 ERROR_EMAIL_PROVIDER_RATE_LIMITED = "EMAIL_PROVIDER_RATE_LIMITED"
 ERROR_OTP_TIMEOUT_SECONDARY = "OTP_TIMEOUT_SECONDARY"
+ERROR_INVALID_AUTH_STEP = "INVALID_AUTH_STEP"
 
 
 @dataclass
@@ -160,6 +171,7 @@ class RegistrationEngine:
 
         # 创建 HTTP 客户端
         self.http_client = OpenAIHTTPClient(proxy_url=proxy_url)
+        self.fingerprint_profile: FingerprintProfile = self.http_client.fingerprint_profile
 
         # 创建 OAuth 管理器
         settings = get_settings()
@@ -184,6 +196,12 @@ class RegistrationEngine:
         self._otp_sent_at: Optional[float] = None  # OTP 发送时间戳
         self._is_existing_account: bool = False  # 是否为已注册账号（用于自动登录）
         self.phase_history: list[PhaseResult] = []
+        self._last_create_account_error: str = ""
+        self._pending_continue_url: Optional[str] = None
+        self._email_verified: bool = False
+        self._resolved_workspace_id: Optional[str] = None
+        self._callback_url: Optional[str] = None
+        self._token_info: Optional[Dict[str, Any]] = None
 
     def _log(self, message: str, level: str = "info"):
         """记录日志"""
@@ -236,16 +254,98 @@ class RegistrationEngine:
             logger.warning(f"上报任务阶段状态失败: {e}")
 
     def _current_device_id(self) -> Optional[str]:
-        """优先复用现有 Device ID，避免重复触发慢请求。"""
-        if self.device_id:
-            return self.device_id
-        if not self.session:
+        """优先以当前 Cookie 为准，避免盲复用内存中的旧 Device ID。"""
+        did = self._sync_device_id_from_session(clear_when_missing=False)
+        if did:
+            return did
+        if self.session:
             return None
+        return self.device_id
 
-        did = self.session.cookies.get("oai-did")
+    def _sync_device_id_from_session(self, *, clear_when_missing: bool) -> Optional[str]:
+        if not self.session:
+            return self.device_id
+
+        did = str(self.session.cookies.get("oai-did") or "").strip()
         if did:
             self.device_id = did
-        return did
+            return did
+
+        if clear_when_missing:
+            self.device_id = None
+        return None
+
+    def _session_get(
+        self,
+        url: str,
+        *,
+        request_kind: str,
+        headers: Optional[Dict[str, str]] = None,
+        **kwargs,
+    ):
+        if not self.session:
+            raise RuntimeError("session not initialized")
+
+        request_kwargs = dict(kwargs)
+        request_kwargs.update(
+            self.fingerprint_profile.request_kwargs(
+                url=url,
+                request_kind=request_kind,
+                headers=headers,
+            )
+        )
+        return self.session.get(url, **request_kwargs)
+
+    def _session_post(
+        self,
+        url: str,
+        *,
+        request_kind: str,
+        headers: Optional[Dict[str, str]] = None,
+        **kwargs,
+    ):
+        if not self.session:
+            raise RuntimeError("session not initialized")
+
+        request_kwargs = dict(kwargs)
+        request_kwargs.update(
+            self.fingerprint_profile.request_kwargs(
+                url=url,
+                request_kind=request_kind,
+                headers=headers,
+            )
+        )
+        return self.session.post(url, **request_kwargs)
+
+    def _rebuild_session(self, reason: str) -> None:
+        self._log(f"重建 HTTP 会话: {reason}", "warning")
+        self.http_client.close()
+        self.session = self.http_client.session
+        self.fingerprint_profile = self.http_client.fingerprint_profile
+        self._sync_device_id_from_session(clear_when_missing=True)
+
+    def _probe_device_id_validity(self, stage: str) -> bool:
+        if not self.oauth_start:
+            return False
+
+        try:
+            self._emit_status("device_id_probe", f"{stage} 前探测 Device ID 有效性")
+            started_at = time.time()
+            response = self._session_get(
+                self.oauth_start.auth_url,
+                request_kind="navigate",
+                timeout=15,
+            )
+            self._log_timed_http_result(f"{stage} Device ID 探测", started_at, response)
+            refreshed = self._sync_device_id_from_session(clear_when_missing=True)
+            if refreshed:
+                self._log(f"{stage} Device ID 有效: {refreshed}")
+                return True
+            self._log(f"{stage} Device ID 探测失败: 当前 Cookie 未携带 oai-did", "warning")
+            return False
+        except Exception as e:
+            self._log(f"{stage} Device ID 探测失败: {e}", "warning")
+            return False
 
     def _log_timed_http_result(
         self,
@@ -279,19 +379,124 @@ class RegistrationEngine:
                 return phase_result
         return None
 
-    def _phase_email_prepare(self) -> bool:
+    def _serialize_provider_backoff(
+        self,
+        provider_backoff: Optional[EmailProviderBackoffState],
+    ) -> Optional[Dict[str, Any]]:
+        if provider_backoff is None:
+            return None
+        return provider_backoff.to_dict()
+
+    def _serialize_phase_result(self, phase_result: PhaseResult) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "success": phase_result.success,
+        }
+        if phase_result.error_message:
+            payload["error_message"] = phase_result.error_message
+        if phase_result.error_code:
+            payload["error_code"] = phase_result.error_code
+        if phase_result.retryable:
+            payload["retryable"] = True
+        if phase_result.next_action:
+            payload["next_action"] = phase_result.next_action
+        provider_backoff = self._serialize_provider_backoff(phase_result.provider_backoff)
+        if provider_backoff is not None:
+            payload["provider_backoff"] = provider_backoff
+        if phase_result.metadata:
+            payload["metadata"] = dict(phase_result.metadata)
+        return payload
+
+    def _collect_phase_history_metadata(self) -> Dict[str, Any]:
+        if not self.phase_history:
+            return {}
+        return {
+            "phase_results": {
+                phase_result.phase: self._serialize_phase_result(phase_result)
+                for phase_result in self.phase_history
+            }
+        }
+
+    def _complete_phase(
+        self,
+        phase: str,
+        *,
+        success: bool,
+        error_message: str = "",
+        error_code: str = "",
+        retryable: bool = False,
+        next_action: str = "",
+        provider_backoff: Optional[EmailProviderBackoffState] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> PhaseResult:
+        return self._record_phase_result(
+            PhaseResult(
+                phase=phase,
+                success=success,
+                error_message=error_message,
+                error_code=error_code,
+                retryable=retryable,
+                next_action=next_action,
+                provider_backoff=provider_backoff,
+                metadata=metadata or {},
+            )
+        )
+
+    def _phase_ip_check(self) -> PhaseResult:
+        ip_ok, location = self._check_ip_location()
+        if not ip_ok:
+            detail = location or "IP 地理位置检查失败"
+            self._log(f"IP 检查失败: {detail}", "error")
+            return self._complete_phase(
+                PHASE_IP_CHECK,
+                success=False,
+                error_message=detail,
+                metadata={"location": detail},
+            )
+
+        self._log(f"IP 位置: {location}")
+        return self._complete_phase(
+            PHASE_IP_CHECK,
+            success=True,
+            metadata={"location": location},
+        )
+
+    def _phase_email_prepare(self) -> PhaseResult:
+        provider_backoff = getattr(self.email_service, "provider_backoff_state", None)
+        if provider_backoff is not None and provider_backoff.is_open():
+            remaining_seconds = max(
+                0,
+                math.ceil(provider_backoff.opened_until - time.time()),
+            )
+            error_message = (
+                f"邮箱服务退避中，需等待 {remaining_seconds} 秒"
+                if not provider_backoff.last_error
+                else f"{provider_backoff.last_error} (退避剩余 {remaining_seconds} 秒)"
+            )
+            self._log(error_message, "warning")
+            return self._complete_phase(
+                PHASE_EMAIL_PREPARE,
+                success=False,
+                error_message=error_message,
+                error_code=ERROR_EMAIL_PROVIDER_RATE_LIMITED,
+                retryable=True,
+                next_action="switch_provider",
+                provider_backoff=provider_backoff,
+                metadata={
+                    "backoff_active": True,
+                    "backoff_remaining_seconds": remaining_seconds,
+                },
+            )
+
         success = self._create_email()
         provider_backoff = getattr(self.email_service, "provider_backoff_state", None)
 
         if success:
-            self._record_phase_result(
-                PhaseResult(
-                    phase=PHASE_EMAIL_PREPARE,
-                    success=True,
-                    provider_backoff=provider_backoff,
-                )
+            return self._complete_phase(
+                PHASE_EMAIL_PREPARE,
+                success=True,
+                provider_backoff=provider_backoff,
+                metadata={"email": self.email},
             )
-            return True
 
         error_message = getattr(self.email_service, "last_error", None) or "创建邮箱失败"
         is_rate_limited = bool(
@@ -299,23 +504,113 @@ class RegistrationEngine:
             and provider_backoff.failures > 0
             and provider_backoff.delay_seconds > 0
         )
-        self._record_phase_result(
-            PhaseResult(
-                phase=PHASE_EMAIL_PREPARE,
-                success=False,
-                error_message=error_message,
-                error_code=ERROR_EMAIL_PROVIDER_RATE_LIMITED if is_rate_limited else "",
-                retryable=is_rate_limited,
-                next_action="switch_provider" if is_rate_limited else "",
-                provider_backoff=provider_backoff,
-            )
+        return self._complete_phase(
+            PHASE_EMAIL_PREPARE,
+            success=False,
+            error_message=error_message,
+            error_code=ERROR_EMAIL_PROVIDER_RATE_LIMITED if is_rate_limited else "",
+            retryable=is_rate_limited,
+            next_action="switch_provider" if is_rate_limited else "",
+            provider_backoff=provider_backoff,
         )
-        return False
+
+    def _phase_signup_submit(self) -> PhaseResult:
+        if not self._init_session():
+            return self._complete_phase(
+                PHASE_SIGNUP_SUBMIT,
+                success=False,
+                error_message="初始化会话失败",
+            )
+
+        if not self._start_oauth():
+            return self._complete_phase(
+                PHASE_SIGNUP_SUBMIT,
+                success=False,
+                error_message="开始 OAuth 流程失败",
+            )
+
+        did = self._get_device_id()
+        if not did:
+            return self._complete_phase(
+                PHASE_SIGNUP_SUBMIT,
+                success=False,
+                error_message="获取 Device ID 失败",
+            )
+
+        sen_token = self._check_sentinel(did)
+        if sen_token:
+            self._log("Sentinel 检查通过")
+        else:
+            self._log("Sentinel 检查失败或未启用", "warning")
+
+        signup_result = self._submit_signup_form(did, sen_token)
+        if not signup_result.success:
+            return self._complete_phase(
+                PHASE_SIGNUP_SUBMIT,
+                success=False,
+                error_message=f"提交注册表单失败: {signup_result.error_message}",
+            )
+
+        return self._complete_phase(
+            PHASE_SIGNUP_SUBMIT,
+            success=True,
+            metadata={
+                "device_id": did,
+                "page_type": signup_result.page_type,
+                "is_existing_account": signup_result.is_existing_account,
+            },
+        )
+
+    def _phase_signup_password(self) -> PhaseResult:
+        if self._is_existing_account:
+            self._log("已注册账号跳过密码设置，OTP 已自动发送")
+            return self._complete_phase(
+                PHASE_SIGNUP_PASSWORD,
+                success=True,
+                metadata={"skipped": True, "is_existing_account": True},
+            )
+
+        password_ok, _ = self._register_password()
+        if not password_ok:
+            return self._complete_phase(
+                PHASE_SIGNUP_PASSWORD,
+                success=False,
+                error_message="注册密码失败",
+            )
+
+        return self._complete_phase(PHASE_SIGNUP_PASSWORD, success=True)
+
+    def _phase_otp_primary(self) -> PhaseResult:
+        if self._is_existing_account:
+            self._otp_sent_at = time.time()
+            self._log("已注册账号跳过发送验证码，使用自动发送的 OTP")
+            return self._complete_phase(
+                PHASE_OTP_PRIMARY,
+                success=True,
+                metadata={"skipped": True, "otp_sent_at": self._otp_sent_at},
+            )
+
+        if not self._send_verification_code():
+            return self._complete_phase(
+                PHASE_OTP_PRIMARY,
+                success=False,
+                error_message="发送验证码失败",
+            )
+
+        return self._complete_phase(
+            PHASE_OTP_PRIMARY,
+            success=True,
+            metadata={"otp_sent_at": self._otp_sent_at},
+        )
 
     def _check_ip_location(self) -> Tuple[bool, Optional[str]]:
         """检查 IP 地理位置"""
         try:
             return self.http_client.check_ip_location()
+        except HTTPClientError as e:
+            detail = str(e)
+            self._log(f"检查 IP 地理位置失败: {detail}", "error")
+            return False, detail
         except Exception as e:
             self._log(f"检查 IP 地理位置失败: {e}", "error")
             return False, None
@@ -353,6 +648,8 @@ class RegistrationEngine:
         """初始化会话"""
         try:
             self.session = self.http_client.session
+            self.fingerprint_profile = self.http_client.fingerprint_profile
+            self._sync_device_id_from_session(clear_when_missing=True)
             return True
         except Exception as e:
             self._log(f"初始化会话失败: {e}", "error")
@@ -379,16 +676,18 @@ class RegistrationEngine:
                 close_email_service()
             except Exception as e:
                 self._log(f"关闭邮箱服务失败: {e}", "warning")
-
-    def _get_device_id(self) -> Optional[str]:
+    def _get_device_id(self, force_refresh: bool = False) -> Optional[str]:
         """获取 Device ID"""
         if not self.oauth_start:
             return None
 
-        cached_did = self._current_device_id()
+        cached_did = None if force_refresh else self._current_device_id()
         if cached_did:
             self._log(f"复用已有 Device ID: {cached_did}")
             return cached_did
+
+        if force_refresh:
+            self._sync_device_id_from_session(clear_when_missing=True)
 
         max_attempts = 3
         for attempt in range(1, max_attempts + 1):
@@ -403,15 +702,15 @@ class RegistrationEngine:
                     max_attempts=max_attempts,
                 )
                 started_at = time.time()
-                response = self.session.get(
+                response = self._session_get(
                     self.oauth_start.auth_url,
+                    request_kind="navigate",
                     timeout=20
                 )
                 self._log_timed_http_result("获取 Device ID 请求", started_at, response)
-                did = self.session.cookies.get("oai-did")
+                did = self._sync_device_id_from_session(clear_when_missing=True)
 
                 if did:
-                    self.device_id = did
                     self._log(f"Device ID: {did}")
                     return did
 
@@ -427,8 +726,7 @@ class RegistrationEngine:
 
             if attempt < max_attempts:
                 time.sleep(attempt)
-                self.http_client.close()
-                self.session = self.http_client.session
+                self._rebuild_session(f"Device ID 获取重试 {attempt}/{max_attempts}")
 
         return None
 
@@ -446,11 +744,15 @@ class RegistrationEngine:
             started_at = time.time()
             response = self.http_client.post(
                 OPENAI_API_ENDPOINTS["sentinel"],
-                headers={
-                    "origin": "https://sentinel.openai.com",
-                    "referer": "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=20260219f9f6",
-                    "content-type": "text/plain;charset=UTF-8",
-                },
+                headers=self.fingerprint_profile.build_headers(
+                    url=OPENAI_API_ENDPOINTS["sentinel"],
+                    request_kind="api",
+                    headers={
+                        "origin": "https://sentinel.openai.com",
+                        "referer": "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=20260219f9f6",
+                        "content-type": "text/plain;charset=UTF-8",
+                    },
+                ),
                 data=sen_req_body,
             )
             self._log_timed_http_result("Sentinel 校验", started_at, response)
@@ -487,8 +789,9 @@ class RegistrationEngine:
                 sentinel = f'{{"p": "", "t": "", "c": "{sen_token}", "id": "{did}", "flow": "authorize_continue"}}'
                 headers["openai-sentinel-token"] = sentinel
 
-            response = self.session.post(
+            response = self._session_post(
                 OPENAI_API_ENDPOINTS["signup"],
+                request_kind="api",
                 headers=headers,
                 data=signup_body,
             )
@@ -544,8 +847,9 @@ class RegistrationEngine:
                 "username": self.email
             })
 
-            response = self.session.post(
+            response = self._session_post(
                 OPENAI_API_ENDPOINTS["register"],
+                request_kind="api",
                 headers={
                     "referer": "https://auth.openai.com/create-account/password",
                     "accept": "application/json",
@@ -612,8 +916,9 @@ class RegistrationEngine:
             # 记录发送时间戳
             self._otp_sent_at = time.time()
 
-            response = self.session.get(
+            response = self._session_get(
                 OPENAI_API_ENDPOINTS["send_otp"],
+                request_kind="api",
                 headers={
                     "referer": referer,
                     "accept": "application/json",
@@ -629,20 +934,28 @@ class RegistrationEngine:
 
     def _get_verification_code(self) -> Optional[str]:
         """获取验证码"""
-        code, _ = self._phase_otp_secondary(
+        code, _ = self._await_secondary_otp_code(
             PhaseContext(otp_sent_at=self._otp_sent_at),
             started_at=time.time(),
         )
         return code
 
-    def _phase_otp_secondary(
+    def _await_secondary_otp_code(
         self,
         context: PhaseContext,
         started_at: Optional[float] = None,
+        *,
+        record_phase: bool = True,
     ) -> Tuple[Optional[str], PhaseResult]:
         """等待二次验证码邮件并做超时归因。"""
         try:
-            self._log(f"正在等待邮箱 {self.email} 的验证码...")
+            self._emit_status(
+                PHASE_OTP_SECONDARY,
+                "正在等待验证邮件...",
+                email=self.email,
+            )
+            self._log("正在等待验证邮件...")
+            self._log(f"正在轮询邮箱 {self.email} 的验证码邮件...")
 
             email_id = self.email_info.get("service_id") if self.email_info else None
             budget = Budget(
@@ -652,21 +965,21 @@ class RegistrationEngine:
             remaining_timeout = budget.remaining_seconds()
 
             if remaining_timeout <= 0:
-                phase_result = self._record_phase_result(
-                    PhaseResult(
-                        phase=PHASE_OTP_SECONDARY,
-                        success=False,
-                        error_message="等待验证码超时",
-                        error_code=ERROR_OTP_TIMEOUT_SECONDARY,
-                        retryable=True,
-                        next_action="await_email",
-                        metadata={
-                            "budget_started_at": budget.started_at,
-                            "budget_timeout_seconds": budget.timeout_seconds,
-                            "otp_sent_at": context.otp_sent_at,
-                        },
-                    )
+                phase_result = PhaseResult(
+                    phase=PHASE_OTP_SECONDARY,
+                    success=False,
+                    error_message="等待验证码超时",
+                    error_code=ERROR_OTP_TIMEOUT_SECONDARY,
+                    retryable=True,
+                    next_action="await_email",
+                    metadata={
+                        "budget_started_at": budget.started_at,
+                        "budget_timeout_seconds": budget.timeout_seconds,
+                        "otp_sent_at": context.otp_sent_at,
+                    },
                 )
+                if record_phase:
+                    phase_result = self._record_phase_result(phase_result)
                 self._log(phase_result.error_message, "error")
                 return None, phase_result
 
@@ -680,56 +993,100 @@ class RegistrationEngine:
 
             if code:
                 self._log(f"成功获取验证码: {code}")
-                phase_result = self._record_phase_result(
-                    PhaseResult(
-                        phase=PHASE_OTP_SECONDARY,
-                        success=True,
-                        metadata={
-                            "budget_started_at": budget.started_at,
-                            "budget_timeout_seconds": budget.timeout_seconds,
-                            "otp_sent_at": context.otp_sent_at,
-                        },
-                    )
-                )
-                return code, phase_result
-
-            phase_result = self._record_phase_result(
-                PhaseResult(
+                phase_result = PhaseResult(
                     phase=PHASE_OTP_SECONDARY,
-                    success=False,
-                    error_message="等待验证码超时",
-                    error_code=ERROR_OTP_TIMEOUT_SECONDARY,
-                    retryable=True,
-                    next_action="await_email",
+                    success=True,
                     metadata={
                         "budget_started_at": budget.started_at,
                         "budget_timeout_seconds": budget.timeout_seconds,
                         "otp_sent_at": context.otp_sent_at,
                     },
                 )
+                if record_phase:
+                    phase_result = self._record_phase_result(phase_result)
+                return code, phase_result
+
+            phase_result = PhaseResult(
+                phase=PHASE_OTP_SECONDARY,
+                success=False,
+                error_message="等待验证码超时",
+                error_code=ERROR_OTP_TIMEOUT_SECONDARY,
+                retryable=True,
+                next_action="await_email",
+                metadata={
+                    "budget_started_at": budget.started_at,
+                    "budget_timeout_seconds": budget.timeout_seconds,
+                    "otp_sent_at": context.otp_sent_at,
+                },
             )
+            if record_phase:
+                phase_result = self._record_phase_result(phase_result)
             self._log(phase_result.error_message, "error")
             return None, phase_result
 
         except Exception as e:
             self._log(f"获取验证码失败: {e}", "error")
-            phase_result = self._record_phase_result(
-                PhaseResult(
-                    phase=PHASE_OTP_SECONDARY,
-                    success=False,
-                    error_message=str(e),
-                    metadata={"otp_sent_at": context.otp_sent_at},
-                )
+            phase_result = PhaseResult(
+                phase=PHASE_OTP_SECONDARY,
+                success=False,
+                error_message=str(e),
+                metadata={"otp_sent_at": context.otp_sent_at},
             )
+            if record_phase:
+                phase_result = self._record_phase_result(phase_result)
             return None, phase_result
+
+    def _phase_otp_secondary(
+        self,
+        context: Optional[PhaseContext] = None,
+        started_at: Optional[float] = None,
+    ):
+        if context is not None or started_at is not None:
+            return self._await_secondary_otp_code(
+                context or PhaseContext(otp_sent_at=self._otp_sent_at),
+                started_at=started_at,
+                record_phase=True,
+            )
+
+        code, wait_phase = self._await_secondary_otp_code(
+            PhaseContext(otp_sent_at=self._otp_sent_at),
+            started_at=time.time(),
+            record_phase=False,
+        )
+        self._email_verified = False
+        if not code:
+            return self._record_phase_result(wait_phase)
+
+        valid, continue_url = self._validate_verification_code_and_get_continue_url(code)
+        if not valid:
+            return self._complete_phase(
+                PHASE_OTP_SECONDARY,
+                success=False,
+                error_message="验证验证码失败",
+                metadata={"otp_sent_at": self._otp_sent_at},
+            )
+
+        self._email_verified = True
+        self._pending_continue_url = continue_url or None
+        self._log("验证码校验完成，Session 已进入 email_verified 状态")
+        return self._complete_phase(
+            PHASE_OTP_SECONDARY,
+            success=True,
+            metadata={
+                **wait_phase.metadata,
+                "continue_url": self._pending_continue_url,
+                "email_verified": True,
+            },
+        )
 
     def _validate_verification_code(self, code: str) -> bool:
         """验证验证码"""
         try:
             code_body = f'{{"code":"{code}"}}'
 
-            response = self.session.post(
+            response = self._session_post(
                 OPENAI_API_ENDPOINTS["validate_otp"],
+                request_kind="api",
                 headers={
                     "referer": "https://auth.openai.com/email-verification",
                     "accept": "application/json",
@@ -748,12 +1105,23 @@ class RegistrationEngine:
     def _create_user_account(self) -> bool:
         """创建用户账户"""
         try:
+            self._last_create_account_error = ""
             user_info = generate_random_user_info()
+            age = calculate_age_from_birthdate(user_info["birthdate"])
             self._log(f"生成用户信息: {user_info['name']}, 生日: {user_info['birthdate']}")
+
+            if age < 18:
+                self._last_create_account_error = (
+                    f"本地年龄校验失败: birthdate={user_info['birthdate']}, age={age}"
+                )
+                self._log(self._last_create_account_error, "error")
+                return False
+
             create_account_body = json.dumps(user_info)
 
-            response = self.session.post(
+            response = self._session_post(
                 OPENAI_API_ENDPOINTS["create_account"],
+                request_kind="api",
                 headers={
                     "referer": "https://auth.openai.com/about-you",
                     "accept": "application/json",
@@ -764,15 +1132,59 @@ class RegistrationEngine:
 
             self._log(f"账户创建状态: {response.status_code}")
 
+            if response.status_code == 400:
+                self._last_create_account_error = response.text
+                self._log(f"账户创建失败: {response.text}", "warning")
+                return False
+
             if response.status_code != 200:
-                self._log(f"账户创建失败: {response.text[:200]}", "warning")
+                self._last_create_account_error = f"HTTP {response.status_code}: {response.text[:200]}"
+                self._log(f"账户创建失败: {self._last_create_account_error}", "warning")
                 return False
 
             return True
 
         except Exception as e:
+            self._last_create_account_error = str(e)
             self._log(f"创建账户失败: {e}", "error")
             return False
+
+    def _phase_account_create(self) -> PhaseResult:
+        if self._is_existing_account:
+            self._log("已注册账号跳过创建用户账户")
+            return self._complete_phase(
+                PHASE_ACCOUNT_CREATE,
+                success=True,
+                metadata={"skipped": True, "is_existing_account": True},
+            )
+
+        if not self._email_verified:
+            otp_secondary_result = self._get_phase_result(PHASE_OTP_SECONDARY)
+            self._log(
+                "account_create 准入失败: otp_secondary 未完成，禁止发送创建账户资料请求",
+                "error",
+            )
+            return self._complete_phase(
+                PHASE_ACCOUNT_CREATE,
+                success=False,
+                error_message="邮箱尚未完成验证，禁止创建用户账户",
+                error_code=ERROR_INVALID_AUTH_STEP,
+                metadata={
+                    "email_verified": False,
+                    "otp_secondary_completed": bool(
+                        otp_secondary_result and otp_secondary_result.success
+                    ),
+                },
+            )
+
+        if not self._create_user_account():
+            return self._complete_phase(
+                PHASE_ACCOUNT_CREATE,
+                success=False,
+                error_message=self._last_create_account_error or "创建用户账户失败",
+            )
+
+        return self._complete_phase(PHASE_ACCOUNT_CREATE, success=True)
 
     def _get_workspace_id(self) -> Optional[str]:
         """获取 Workspace ID"""
@@ -991,8 +1403,9 @@ class RegistrationEngine:
         try:
             select_body = f'{{"workspace_id":"{workspace_id}"}}'
 
-            response = self.session.post(
+            response = self._session_post(
                 OPENAI_API_ENDPOINTS["select_workspace"],
+                request_kind="api",
                 headers={
                     "referer": "https://auth.openai.com/sign-in-with-chatgpt/codex/consent",
                     "content-type": "application/json",
@@ -1073,8 +1486,9 @@ class RegistrationEngine:
             sen_token = self._check_sentinel(did) if did else None
             self._log("登录重入：请求 authorize 页面以确认当前表单状态")
             started_at = time.time()
-            response = self.session.get(
+            response = self._session_get(
                 self.oauth_start.auth_url,
+                request_kind="navigate",
                 timeout=15,
             )
             self._log_timed_http_result("登录重入 authorize 页面", started_at, response)
@@ -1094,8 +1508,9 @@ class RegistrationEngine:
                 self._emit_status("login_reentry", "提交邮箱以推进到密码页")
                 self._log("登录重入：提交邮箱到 authorize/continue")
                 started_at = time.time()
-                login_response = self.session.post(
+                login_response = self._session_post(
                     "https://auth.openai.com/api/accounts/authorize/continue",
+                    request_kind="api",
                     headers={
                         "referer": "https://auth.openai.com/log-in",
                         "accept": "application/json",
@@ -1131,7 +1546,7 @@ class RegistrationEngine:
                     try:
                         self._emit_status("login_reentry", "跟进登录 continue_url")
                         started_at = time.time()
-                        self.session.get(continue_url, timeout=15)
+                        self._session_get(continue_url, request_kind="navigate", timeout=15)
                         self._log_timed_http_result("登录重入 continue_url", started_at)
                     except Exception:
                         pass
@@ -1155,8 +1570,9 @@ class RegistrationEngine:
             did = self._current_device_id()
             sen_token = self._check_sentinel(did) if did else None
             started_at = time.time()
-            response = self.session.post(
+            response = self._session_post(
                 "https://auth.openai.com/api/accounts/password/verify",
+                request_kind="api",
                 headers={
                     "referer": "https://auth.openai.com/log-in/password",
                     "accept": "application/json",
@@ -1194,7 +1610,7 @@ class RegistrationEngine:
                     try:
                         self._emit_status("login_password", "跟进密码校验 continue_url")
                         started_at = time.time()
-                        self.session.get(continue_url, timeout=15)
+                        self._session_get(continue_url, request_kind="navigate", timeout=15)
                         self._log_timed_http_result("密码校验 continue_url", started_at)
                     except Exception:
                         pass
@@ -1210,8 +1626,9 @@ class RegistrationEngine:
         try:
             did = self._current_device_id()
             sen_token = self._check_sentinel(did) if did else None
-            response = self.session.post(
+            response = self._session_post(
                 "https://auth.openai.com/api/accounts/password/verify",
+                request_kind="api",
                 headers={
                     "referer": "https://auth.openai.com/log-in/password",
                     "accept": "application/json",
@@ -1248,7 +1665,7 @@ class RegistrationEngine:
             continue_url = str(payload.get("continue_url") or "").strip() or None
             if continue_url:
                 try:
-                    self.session.get(continue_url, timeout=15)
+                    self._session_get(continue_url, request_kind="navigate", timeout=15)
                 except Exception:
                     pass
             return True, continue_url
@@ -1260,8 +1677,9 @@ class RegistrationEngine:
         try:
             code_body = f'{{"code":"{code}"}}'
 
-            response = self.session.post(
+            response = self._session_post(
                 OPENAI_API_ENDPOINTS["validate_otp"],
+                request_kind="api",
                 headers={
                     "referer": "https://auth.openai.com/email-verification",
                     "accept": "application/json",
@@ -1297,7 +1715,13 @@ class RegistrationEngine:
             self._log("重新开始 OAuth 登录流程失败", "warning")
             return None, None
 
-        if not self._get_device_id():
+        if self._probe_device_id_validity("advance_login_authorization"):
+            did = self._current_device_id()
+        else:
+            self._rebuild_session("advance_login_authorization Device ID 探测失败")
+            did = self._get_device_id(force_refresh=True)
+
+        if not did:
             self._log("重新登录流程获取 Device ID 失败", "warning")
             return None, None
 
@@ -1325,7 +1749,11 @@ class RegistrationEngine:
         self._emit_status("workspace_extract", "请求 consent 页面并提取 Workspace ID")
         self._log(f"请求 consent 页面: {auth_target[:120]}...")
         started_at = time.time()
-        auth_response = self.session.get(auth_target, timeout=20)
+        auth_response = self._session_get(
+            auth_target,
+            request_kind="navigate",
+            timeout=20,
+        )
         self._log_timed_http_result("获取 consent 页面", started_at, auth_response)
         current_url = str(getattr(auth_response, "url", "") or "")
         html = auth_response.text or ""
@@ -1345,6 +1773,177 @@ class RegistrationEngine:
 
         return None, None
 
+    def _phase_oauth_reenter(self) -> PhaseResult:
+        if self._is_existing_account:
+            self._log("已注册账号跳过 OAuth 重入")
+            return self._complete_phase(
+                PHASE_OAUTH_REENTER,
+                success=True,
+                metadata={"skipped": True, "is_existing_account": True},
+            )
+
+        self._pending_continue_url = None
+        self._callback_url = None
+        self._resolved_workspace_id = None
+
+        if not self._init_session():
+            self._log("重新初始化登录会话失败", "warning")
+            return self._complete_phase(
+                PHASE_OAUTH_REENTER,
+                success=False,
+                error_message="重新初始化登录会话失败",
+                retryable=True,
+                next_action=PHASE_WORKSPACE_RESOLVE,
+            )
+
+        if not self._start_oauth():
+            self._log("重新开始 OAuth 登录流程失败", "warning")
+            return self._complete_phase(
+                PHASE_OAUTH_REENTER,
+                success=False,
+                error_message="重新开始 OAuth 登录流程失败",
+                retryable=True,
+                next_action=PHASE_WORKSPACE_RESOLVE,
+            )
+
+        if self._probe_device_id_validity(PHASE_OAUTH_REENTER):
+            did = self._current_device_id()
+        else:
+            self._rebuild_session("oauth_reenter Device ID 探测失败")
+            did = self._get_device_id(force_refresh=True)
+
+        if not did:
+            self._log("重新登录流程获取 Device ID 失败", "warning")
+            return self._complete_phase(
+                PHASE_OAUTH_REENTER,
+                success=False,
+                error_message="重新登录流程获取 Device ID 失败",
+                retryable=True,
+                next_action=PHASE_WORKSPACE_RESOLVE,
+            )
+
+        if not self._try_reenter_login_flow():
+            self._log("未能重新进入登录流程", "warning")
+            return self._complete_phase(
+                PHASE_OAUTH_REENTER,
+                success=False,
+                error_message="未能重新进入登录流程",
+                retryable=True,
+                next_action=PHASE_WORKSPACE_RESOLVE,
+            )
+
+        self._otp_sent_at = time.time()
+        if not self._submit_login_password_step():
+            return self._complete_phase(
+                PHASE_OAUTH_REENTER,
+                success=False,
+                error_message="登录密码提交失败",
+                retryable=True,
+                next_action=PHASE_WORKSPACE_RESOLVE,
+            )
+
+        return self._complete_phase(
+            PHASE_OAUTH_REENTER,
+            success=True,
+            metadata={"otp_sent_at": self._otp_sent_at},
+        )
+
+    def _phase_workspace_resolve(self) -> PhaseResult:
+        self._resolved_workspace_id = None
+        self._callback_url = None
+
+        consent_target = self._pending_continue_url or (
+            self.oauth_start.auth_url if self.oauth_start else None
+        )
+        if consent_target:
+            self._log(f"请求 consent 页面: {consent_target[:120]}...")
+            try:
+                started_at = time.time()
+                auth_response = self._session_get(
+                    consent_target,
+                    request_kind="navigate",
+                    timeout=20,
+                )
+                self._log_timed_http_result("获取 consent 页面", started_at, auth_response)
+                current_url = str(getattr(auth_response, "url", "") or "")
+                html = auth_response.text or ""
+
+                if (
+                    "sign-in-with-chatgpt/codex/consent" in current_url
+                    or 'action="/sign-in-with-chatgpt/codex/consent"' in html
+                ):
+                    workspace_id = self._extract_workspace_id_from_response(
+                        response=auth_response,
+                        html=html,
+                        url=current_url,
+                    )
+                    if workspace_id:
+                        continue_url = self._select_workspace(workspace_id)
+                        if not continue_url:
+                            return self._complete_phase(
+                                PHASE_WORKSPACE_RESOLVE,
+                                success=False,
+                                error_message="选择 Workspace 失败",
+                            )
+
+                        callback_url = self._follow_redirects(continue_url)
+                        if not callback_url:
+                            return self._complete_phase(
+                                PHASE_WORKSPACE_RESOLVE,
+                                success=False,
+                                error_message="跟随重定向链失败",
+                            )
+
+                        self._resolved_workspace_id = workspace_id
+                        self._callback_url = callback_url
+                        return self._complete_phase(
+                            PHASE_WORKSPACE_RESOLVE,
+                            success=True,
+                            metadata={
+                                "workspace_id": workspace_id,
+                                "callback_url": callback_url,
+                                "resolved_from": "consent",
+                            },
+                        )
+            except Exception as e:
+                self._log(f"请求 consent 页面失败，回退到 Cookie 解析路径: {e}", "warning")
+
+        workspace_id = self._get_workspace_id()
+        if not workspace_id:
+            return self._complete_phase(
+                PHASE_WORKSPACE_RESOLVE,
+                success=False,
+                error_message="获取 Workspace ID 失败",
+            )
+
+        continue_url = self._select_workspace(workspace_id)
+        if not continue_url:
+            return self._complete_phase(
+                PHASE_WORKSPACE_RESOLVE,
+                success=False,
+                error_message="选择 Workspace 失败",
+            )
+
+        callback_url = self._follow_redirects(continue_url)
+        if not callback_url:
+            return self._complete_phase(
+                PHASE_WORKSPACE_RESOLVE,
+                success=False,
+                error_message="跟随重定向链失败",
+            )
+
+        self._resolved_workspace_id = workspace_id
+        self._callback_url = callback_url
+        return self._complete_phase(
+            PHASE_WORKSPACE_RESOLVE,
+            success=True,
+            metadata={
+                "workspace_id": workspace_id,
+                "callback_url": callback_url,
+                "resolved_from": "cookie",
+            },
+        )
+
     def _follow_redirects(self, start_url: str) -> Optional[str]:
         """跟随重定向链，寻找回调 URL"""
         try:
@@ -1362,8 +1961,9 @@ class RegistrationEngine:
                 self._log(f"重定向 {i+1}/{max_redirects}: {current_url[:100]}...")
 
                 started_at = time.time()
-                response = self.session.get(
+                response = self._session_get(
                     current_url,
+                    request_kind="navigate",
                     allow_redirects=False,
                     timeout=15
                 )
@@ -1427,8 +2027,51 @@ class RegistrationEngine:
             self._log(f"处理 OAuth 回调失败: {e}", "error")
             return None
 
+    def _phase_oauth_callback(self) -> PhaseResult:
+        if not self._callback_url:
+            return self._complete_phase(
+                PHASE_OAUTH_CALLBACK,
+                success=False,
+                error_message="处理 OAuth 回调失败",
+            )
+
+        token_info = self._handle_oauth_callback(self._callback_url)
+        if not token_info:
+            return self._complete_phase(
+                PHASE_OAUTH_CALLBACK,
+                success=False,
+                error_message="处理 OAuth 回调失败",
+            )
+
+        self._token_info = token_info
+        return self._complete_phase(
+            PHASE_OAUTH_CALLBACK,
+            success=True,
+            metadata={"account_id": token_info.get("account_id", "")},
+        )
+
     def _resolved_execution_mode(self) -> str:
         return "curl_cffi"
+
+    def _build_phase_failure_result(
+        self,
+        result: RegistrationResult,
+        phase_result: PhaseResult,
+    ) -> RegistrationResult:
+        result.error_message = phase_result.error_message or f"{phase_result.phase} 失败"
+        result.error_code = phase_result.error_code
+        result.metadata = {
+            "failed_phase": phase_result.phase,
+            "retryable": phase_result.retryable,
+            "next_action": phase_result.next_action,
+        }
+        provider_backoff = self._serialize_provider_backoff(phase_result.provider_backoff)
+        if provider_backoff is not None:
+            result.metadata["provider_backoff"] = provider_backoff
+        if phase_result.metadata:
+            result.metadata["phase_metadata"] = dict(phase_result.metadata)
+        result.metadata.update(self._collect_phase_history_metadata())
+        return result
 
     def run(self) -> RegistrationResult:
         """
@@ -1443,202 +2086,71 @@ class RegistrationEngine:
             RegistrationResult: 注册结果
         """
         result = RegistrationResult(success=False, logs=self.logs)
+        phase_sequence = [
+            (PHASE_IP_CHECK, "检查 IP 地理位置", self._phase_ip_check),
+            (PHASE_EMAIL_PREPARE, "创建邮箱地址", self._phase_email_prepare),
+            (PHASE_SIGNUP_SUBMIT, "提交注册表单", self._phase_signup_submit),
+            (PHASE_SIGNUP_PASSWORD, "提交注册密码", self._phase_signup_password),
+            (PHASE_OTP_PRIMARY, "发送或确认首轮验证码", self._phase_otp_primary),
+            (PHASE_OTP_SECONDARY, "等待并校验二次验证码", self._phase_otp_secondary),
+            (PHASE_ACCOUNT_CREATE, "创建 OpenAI 账户资料", self._phase_account_create),
+            (PHASE_OAUTH_REENTER, "重入 Codex OAuth 流程", self._phase_oauth_reenter),
+            (PHASE_WORKSPACE_RESOLVE, "解析 Workspace 与授权回调", self._phase_workspace_resolve),
+            (PHASE_OAUTH_CALLBACK, "处理 OAuth 回调", self._phase_oauth_callback),
+        ]
+        phase_index_map = {
+            phase_name: index for index, (phase_name, _, _) in enumerate(phase_sequence)
+        }
 
         try:
             self._log("=" * 60)
             self._log("开始注册流程")
             self._log("=" * 60)
+            phase_pointer = 0
+            while phase_pointer < len(phase_sequence):
+                phase_name, detail, handler = phase_sequence[phase_pointer]
+                step_index = phase_pointer + 1
+                self._log(f"{step_index}. {detail}...")
+                self._emit_status(phase_name, detail, step_index=step_index)
 
-            # 1. 检查 IP 地理位置
-            self._log("1. 检查 IP 地理位置...")
-            self._emit_status("ip_check", "检查 IP 地理位置", step_index=1)
-            ip_ok, location = self._check_ip_location()
-            if not ip_ok:
-                result.error_message = f"IP 地理位置不支持: {location}"
-                self._log(f"IP 检查失败: {location}", "error")
-                return result
+                phase_result = handler()
+                if phase_result.success:
+                    if phase_name == PHASE_EMAIL_PREPARE:
+                        result.email = self.email or ""
+                    if phase_name == PHASE_WORKSPACE_RESOLVE:
+                        result.workspace_id = self._resolved_workspace_id or ""
+                    phase_pointer += 1
+                    continue
 
-            self._log(f"IP 位置: {location}")
+                next_phase_index = phase_index_map.get(phase_result.next_action, -1)
+                if (
+                    phase_result.retryable
+                    and next_phase_index > phase_pointer
+                ):
+                    self._log(
+                        f"阶段 {phase_name} 失败，按 next_action 跳转到 {phase_result.next_action}",
+                        "warning",
+                    )
+                    phase_pointer = next_phase_index
+                    continue
 
-            # 2. 创建邮箱
-            self._log("2. 创建邮箱...")
-            self._emit_status("email_prepare", "创建邮箱地址", step_index=2)
-            if not self._phase_email_prepare():
-                email_prepare_phase = self._get_phase_result(PHASE_EMAIL_PREPARE)
-                result.error_message = (
-                    email_prepare_phase.error_message
-                    if email_prepare_phase and email_prepare_phase.error_message
-                    else "创建邮箱失败"
-                )
-                result.error_code = email_prepare_phase.error_code if email_prepare_phase else ""
-                return result
+                return self._build_phase_failure_result(result, phase_result)
 
-            result.email = self.email
-
-            # 3. 初始化会话
-            self._log("3. 初始化会话...")
-            self._emit_status("session_init", "初始化 HTTP 会话", step_index=3)
-            if not self._init_session():
-                result.error_message = "初始化会话失败"
-                return result
-
-            # 4. 开始 OAuth 流程
-            self._log("4. 开始 OAuth 授权流程...")
-            self._emit_status("oauth_start", "开始 OAuth 授权流程", step_index=4)
-            if not self._start_oauth():
-                result.error_message = "开始 OAuth 流程失败"
-                return result
-
-            # 5. 获取 Device ID
-            self._log("5. 获取 Device ID...")
-            self._emit_status("oauth_device_id", "获取 Device ID", step_index=5)
-            did = self._get_device_id()
-            if not did:
-                result.error_message = "获取 Device ID 失败"
-                return result
-
-            # 6. 检查 Sentinel 拦截
-            self._log("6. 检查 Sentinel 拦截...")
-            self._emit_status("sentinel", "检查 Sentinel 拦截", step_index=6)
-            sen_token = self._check_sentinel(did)
-            if sen_token:
-                self._log("Sentinel 检查通过")
-            else:
-                self._log("Sentinel 检查失败或未启用", "warning")
-
-            # 7. 提交注册表单 + 解析响应判断账号状态
-            self._log("7. 提交注册表单...")
-            self._emit_status("signup_submit", "提交注册表单", step_index=7)
-            signup_result = self._submit_signup_form(did, sen_token)
-            if not signup_result.success:
-                result.error_message = f"提交注册表单失败: {signup_result.error_message}"
-                return result
-
-            # 8. [已注册账号跳过] 注册密码
-            if self._is_existing_account:
-                self._log("8. [已注册账号] 跳过密码设置，OTP 已自动发送")
-            else:
-                self._log("8. 注册密码...")
-                self._emit_status("signup_password", "提交注册密码", step_index=8)
-                password_ok, password = self._register_password()
-                if not password_ok:
-                    result.error_message = "注册密码失败"
-                    return result
-
-            # 9. [已注册账号跳过] 发送验证码
-            if self._is_existing_account:
-                self._log("9. [已注册账号] 跳过发送验证码，使用自动发送的 OTP")
-                # 已注册账号的 OTP 在提交表单时已自动发送，记录时间戳
-                self._otp_sent_at = time.time()
-            else:
-                self._log("9. 发送验证码...")
-                self._emit_status("otp_send", "发送验证码", step_index=9)
-                if not self._send_verification_code():
-                    result.error_message = "发送验证码失败"
-                    return result
-
-            # 10. 获取验证码
-            self._log("10. 等待验证码...")
-            self._emit_status("otp_secondary", "等待验证码邮件", step_index=10)
-            otp_phase_started_at = time.time()
-            code, otp_phase = self._phase_otp_secondary(
-                PhaseContext(otp_sent_at=self._otp_sent_at),
-                started_at=otp_phase_started_at,
-            )
-            if not code:
-                result.error_message = (
-                    otp_phase.error_message if otp_phase.error_message else "获取验证码失败"
-                )
-                result.error_code = otp_phase.error_code
-                return result
-
-            # 11. 验证验证码
-            self._log("11. 验证验证码...")
-            self._emit_status("otp_validate", "校验验证码", step_index=11)
-            if not self._validate_verification_code(code):
-                result.error_message = "验证验证码失败"
-                return result
-
-            # 12. [已注册账号跳过] 创建用户账户
-            if self._is_existing_account:
-                self._log("12. [已注册账号] 跳过创建用户账户")
-            else:
-                self._log("12. 创建用户账户...")
-                self._emit_status("account_create", "创建 OpenAI 账户资料", step_index=12)
-                if not self._create_user_account():
-                    result.error_message = "创建用户账户失败"
-                    return result
-
-            next_step = 13
-            callback_url = None
-
-            if not self._is_existing_account:
-                self._log(f"{next_step}. [新账号] 推进 Codex 授权流程...")
-                self._emit_status("oauth_reentry", "推进 Codex 授权流程", step_index=next_step)
-                workspace_id, callback_url = self._advance_login_authorization()
-                if workspace_id and callback_url:
-                    result.workspace_id = workspace_id
-                    next_step += 1
-
-            if not result.workspace_id:
-                # 获取 Workspace ID
-                self._log(f"{next_step}. 获取 Workspace ID...")
-                self._emit_status("workspace_extract", "从授权态提取 Workspace ID", step_index=next_step)
-                workspace_id = self._get_workspace_id()
-                if not workspace_id:
-                    result.error_message = "获取 Workspace ID 失败"
-                    return result
-
-                result.workspace_id = workspace_id
-
-                next_step += 1
-
-                # 选择 Workspace
-                self._log(f"{next_step}. 选择 Workspace...")
-                self._emit_status("workspace_select", "选择 Workspace", step_index=next_step)
-                continue_url = self._select_workspace(result.workspace_id)
-                if not continue_url:
-                    result.error_message = "选择 Workspace 失败"
-                    return result
-
-                next_step += 1
-
-                # 跟随重定向链
-                self._log(f"{next_step}. 跟随重定向链...")
-                self._emit_status("redirect_chain", "跟随授权重定向链", step_index=next_step)
-                callback_url = self._follow_redirects(continue_url)
-                if not callback_url:
-                    result.error_message = "跟随重定向链失败"
-                    return result
-
-            next_step += 1
-
-            # 处理 OAuth 回调
-            self._log(f"{next_step}. 处理 OAuth 回调...")
-            self._emit_status("oauth_callback", "处理 OAuth 回调", step_index=next_step)
-            token_info = self._handle_oauth_callback(callback_url)
-            if not token_info:
-                result.error_message = "处理 OAuth 回调失败"
-                return result
-
-            # 提取账户信息
+            token_info = self._token_info or {}
             result.account_id = token_info.get("account_id", "")
             result.access_token = token_info.get("access_token", "")
             result.refresh_token = token_info.get("refresh_token", "")
             result.id_token = token_info.get("id_token", "")
-            result.password = self.password or ""  # 保存密码（已注册账号为空）
-
-            # 设置来源标记
+            result.password = self.password or ""
+            result.workspace_id = self._resolved_workspace_id or result.workspace_id
             result.source = "login" if self._is_existing_account else "register"
 
-            # 尝试获取 session_token 从 cookie
             session_cookie = self.session.cookies.get("__Secure-next-auth.session-token")
             if session_cookie:
                 self.session_token = session_cookie
                 result.session_token = session_cookie
-                self._log(f"获取到 Session Token")
+                self._log("获取到 Session Token")
 
-            # 17. 完成
             self._log("=" * 60)
             if self._is_existing_account:
                 self._log("登录成功! (已注册账号)")
@@ -1657,6 +2169,7 @@ class RegistrationEngine:
                 "is_existing_account": self._is_existing_account,
                 "registration_mode": self._resolved_execution_mode(),
             }
+            result.metadata.update(self._collect_phase_history_metadata())
 
             return result
 
