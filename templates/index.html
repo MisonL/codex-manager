@@ -147,6 +147,20 @@
             color: var(--text-muted);
         }
 
+        .form-fieldset {
+            border: 0;
+            margin: 0;
+            padding: 0;
+            min-width: 0;
+        }
+
+        .form-legend {
+            display: block;
+            width: 100%;
+            margin-bottom: var(--spacing-xs);
+            font-weight: 500;
+        }
+
         .system-badge {
             min-width: 112px;
             justify-content: center;
@@ -218,8 +232,8 @@
 
                                 <!-- Outlook 批量注册区域 -->
                                 <div id="outlook-batch-section" style="display: none;">
-                                    <div class="form-group">
-                                        <label>选择账户</label>
+                                    <fieldset class="form-group form-fieldset">
+                                        <legend class="form-legend">选择账户</legend>
                                         <div id="outlook-accounts-container" style="max-height: 200px; overflow-y: auto; border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--spacing-sm);">
                                             <div class="loading-placeholder" style="text-align: center; padding: var(--spacing-md); color: var(--text-muted);">
                                                 加载中...
@@ -230,7 +244,7 @@
                                             <button type="button" class="btn btn-ghost btn-sm" onclick="selectUnregisteredOutlook()">只选未注册</button>
                                             <button type="button" class="btn btn-ghost btn-sm" onclick="deselectAllOutlookAccounts()">取消全选</button>
                                         </div>
-                                    </div>
+                                    </fieldset>
                                     <div class="form-group">
                                         <label for="outlook-concurrency-mode">并发模式</label>
                                         <select id="outlook-concurrency-mode" name="outlook_concurrency_mode">
@@ -302,8 +316,8 @@
                                     </div>
                                 </div>
 
-                                <div class="form-group" id="auto-upload-group">
-                                    <label style="font-weight: 500; margin-bottom: var(--spacing-xs); display: block;">注册后自动操作</label>
+                                <fieldset class="form-group form-fieldset" id="auto-upload-group">
+                                    <legend class="form-legend">注册后自动操作</legend>
 
                                     <!-- Codex Auth -->
                                     <label
@@ -349,7 +363,7 @@
                                     <div id="newapi-service-select-group" style="display:none; margin-top: 6px; padding-left: 4px;">
                                         <div class="multi-select-dropdown" id="newapi-service-select"></div>
                                     </div>
-                                </div>
+                                </fieldset>
 
                                 <div class="form-actions" style="flex-direction: column;">
                                     <button type="submit" class="btn btn-primary btn-lg" id="start-btn" style="width: 100%;">
