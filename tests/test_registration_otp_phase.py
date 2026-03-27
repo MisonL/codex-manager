@@ -69,7 +69,8 @@ class FakeSession:
 
 
 class FakeResponse:
-    def __init__(self, *, url="", text="", json_payload=None):
+    def __init__(self, *, status_code=200, url="", text="", json_payload=None):
+        self.status_code = status_code
         self.url = url
         self.text = text
         self._json_payload = json_payload
@@ -306,6 +307,12 @@ def test_phase_oauth_reenter_force_refreshes_device_id_after_probe_failure(monke
     monkeypatch.setattr(engine, "_probe_device_id_validity", lambda stage: False)
     monkeypatch.setattr(engine, "_try_reenter_login_flow", lambda: True)
     monkeypatch.setattr(engine, "_submit_login_password_step", lambda: True)
+    monkeypatch.setattr(engine, "_get_verification_code", lambda: "654321")
+    monkeypatch.setattr(
+        engine,
+        "_validate_verification_code_and_get_continue_url",
+        lambda code: (True, "https://auth.example.test/consent"),
+    )
     rebuild_reasons = []
     monkeypatch.setattr(engine, "_rebuild_session", lambda reason: rebuild_reasons.append(reason))
 
@@ -323,6 +330,121 @@ def test_phase_oauth_reenter_force_refreshes_device_id_after_probe_failure(monke
     assert seen_force_refresh == [True]
     assert rebuild_reasons == ["oauth_reenter Device ID 探测失败"]
     assert phase_result.metadata["otp_sent_at"] == 789.0
+    assert phase_result.metadata["continue_url"] == "https://auth.example.test/consent"
+    assert engine._pending_continue_url == "https://auth.example.test/consent"
+
+
+def test_phase_oauth_reenter_waits_for_secondary_login_otp(monkeypatch):
+    email_service = FakeEmailService(code=None)
+    engine = _build_engine(monkeypatch, email_service)
+    engine.oauth_start = SimpleNamespace(auth_url="https://auth.example.test/authorize")
+
+    monkeypatch.setattr(register_module.time, "time", lambda: 654.0)
+    monkeypatch.setattr(engine, "_init_session", lambda: True)
+    monkeypatch.setattr(engine, "_start_oauth", lambda: True)
+    monkeypatch.setattr(engine, "_probe_device_id_validity", lambda stage: True)
+    monkeypatch.setattr(engine, "_current_device_id", lambda: "did-probed")
+    monkeypatch.setattr(engine, "_try_reenter_login_flow", lambda: True)
+    monkeypatch.setattr(engine, "_submit_login_password_step", lambda: True)
+
+    observed = []
+
+    def fake_get_verification_code():
+        observed.append(("otp_wait_anchor", engine._otp_sent_at))
+        return "112233"
+
+    def fake_validate_verification_code_and_get_continue_url(code):
+        observed.append(("otp_code", code))
+        return True, "https://auth.example.test/consent"
+
+    monkeypatch.setattr(engine, "_get_verification_code", fake_get_verification_code)
+    monkeypatch.setattr(
+        engine,
+        "_validate_verification_code_and_get_continue_url",
+        fake_validate_verification_code_and_get_continue_url,
+    )
+
+    phase_result = engine._phase_oauth_reenter()
+
+    assert phase_result.success is True
+    assert observed == [
+        ("otp_wait_anchor", 654.0),
+        ("otp_code", "112233"),
+    ]
+    assert engine._pending_continue_url == "https://auth.example.test/consent"
+
+
+def test_submit_login_password_step_persists_continue_url_for_workspace_phase(monkeypatch):
+    email_service = FakeEmailService(code=None)
+    engine = _build_engine(monkeypatch, email_service)
+    engine.email = "tester@example.com"
+    engine.password = "Pass12345"
+
+    response = FakeResponse(
+        status_code=200,
+        json_payload={"continue_url": "https://auth.example.test/consent"},
+    )
+    continued_urls = []
+
+    monkeypatch.setattr(engine, "_current_device_id", lambda: "did-1")
+    monkeypatch.setattr(engine, "_check_sentinel", lambda did: None)
+    monkeypatch.setattr(engine, "_session_post", lambda *args, **kwargs: response)
+    monkeypatch.setattr(
+        engine,
+        "_session_get",
+        lambda url, **kwargs: continued_urls.append((url, kwargs)) or response,
+    )
+
+    success = engine._submit_login_password_step()
+
+    assert success is True
+    assert engine._pending_continue_url == "https://auth.example.test/consent"
+    assert continued_urls == [
+        (
+            "https://auth.example.test/consent",
+            {"request_kind": "navigate", "timeout": 15},
+        )
+    ]
+
+
+def test_phase_workspace_resolve_prefers_pending_continue_url(monkeypatch):
+    email_service = FakeEmailService(code=None)
+    engine = _build_engine(monkeypatch, email_service)
+    engine.oauth_start = SimpleNamespace(auth_url="https://auth.example.test/oauth/authorize")
+    engine._pending_continue_url = "https://auth.example.test/consent"
+
+    requested_urls = []
+    consent_response = FakeResponse(
+        status_code=200,
+        url="https://auth.example.test/sign-in-with-chatgpt/codex/consent",
+        text="<html><body>consent</body></html>",
+    )
+
+    monkeypatch.setattr(
+        engine,
+        "_session_get",
+        lambda url, **kwargs: requested_urls.append((url, kwargs)) or consent_response,
+    )
+    monkeypatch.setattr(engine, "_extract_workspace_id_from_response", lambda **kwargs: "ws-1")
+    monkeypatch.setattr(engine, "_select_workspace", lambda workspace_id: "https://auth.example.test/continue")
+    monkeypatch.setattr(
+        engine,
+        "_follow_redirects",
+        lambda continue_url: "http://localhost:1455/auth/callback?code=code-1&state=state-1",
+    )
+
+    phase_result = engine._phase_workspace_resolve()
+
+    assert phase_result.success is True
+    assert requested_urls == [
+        (
+            "https://auth.example.test/consent",
+            {"request_kind": "navigate", "timeout": 20},
+        )
+    ]
+    assert phase_result.metadata["resolved_from"] == "consent"
+    assert engine._resolved_workspace_id == "ws-1"
+    assert engine._callback_url == "http://localhost:1455/auth/callback?code=code-1&state=state-1"
 
 
 def test_extract_workspace_id_from_response_payload(monkeypatch):
