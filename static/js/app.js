@@ -9,6 +9,7 @@ let currentBatch = null;
 let logPollingInterval = null;
 let batchPollingInterval = null;
 let accountsPollingInterval = null;
+let systemHeartbeatInterval = null;
 let isBatchMode = false;
 let isOutlookBatchMode = false;
 let outlookAccounts = [];
@@ -36,6 +37,12 @@ let wsHeartbeatInterval = null;  // 心跳定时器
 let batchWsHeartbeatInterval = null;  // 批量任务心跳定时器
 let activeTaskUuid = null;   // 当前活跃的单任务 UUID（用于页面重新可见时重连）
 let activeBatchId = null;    // 当前活跃的批量任务 ID（用于页面重新可见时重连）
+let registrationConfigLocked = false;
+let lastSystemHealthStatus = 'pending';
+
+const MAX_LOG_DOM_NODES = 1000;
+const SYSTEM_HEARTBEAT_INTERVAL_MS = 30000;
+const SYSTEM_HEARTBEAT_TIMEOUT_MS = 5000;
 
 // DOM 元素
 const elements = {
@@ -98,6 +105,10 @@ const elements = {
     autoUploadNewapi: document.getElementById('auto-upload-newapi'),
     newapiServiceSelectGroup: document.getElementById('newapi-service-select-group'),
     newapiServiceSelect: document.getElementById('newapi-service-select'),
+    registrationConfigPanel: document.getElementById('registration-config-panel'),
+    configLockBadge: document.getElementById('config-lock-badge'),
+    configLockNote: document.getElementById('config-lock-note'),
+    systemHealthBadge: document.getElementById('system-health-badge'),
 };
 
 // 初始化
@@ -109,6 +120,9 @@ document.addEventListener('DOMContentLoaded', () => {
     initVisibilityReconnect();
     restoreActiveTask();
     initAutoUploadOptions();
+    setRegistrationConfigLock(false);
+    refreshSystemHealth();
+    startSystemHeartbeat();
 });
 
 // 初始化注册后自动操作选项（CPA / Sub2API / TM）
@@ -473,9 +487,115 @@ function handleConcurrencyModeChange(selectEl, hintEl, intervalGroupEl) {
     }
 }
 
+function getRegistrationLockTargets() {
+    return Array.from(elements.form.querySelectorAll('input, select, textarea, button'));
+}
+
+function setRegistrationConfigLock(locked) {
+    registrationConfigLocked = locked;
+
+    elements.registrationConfigPanel?.classList?.toggle('is-locked', locked);
+
+    if (elements.configLockBadge) {
+        elements.configLockBadge.style.display = locked ? 'inline-flex' : 'none';
+    }
+
+    if (elements.configLockNote) {
+        elements.configLockNote.style.display = locked ? 'block' : 'none';
+    }
+
+    getRegistrationLockTargets().forEach(target => {
+        if (target.id === 'cancel-btn') {
+            target.disabled = !locked;
+            return;
+        }
+        target.disabled = locked;
+    });
+}
+
+function getSystemHealthPresentation(status) {
+    const states = {
+        ok: { text: 'System OK', className: 'ok' },
+        degraded: { text: 'System Degraded', className: 'degraded' },
+        offline: { text: 'System Offline', className: 'offline' },
+        pending: { text: 'System Pending', className: 'pending' },
+    };
+    return states[status] || states.pending;
+}
+
+function updateSystemHealthBadge(payload) {
+    if (!elements.systemHealthBadge) {
+        return;
+    }
+
+    const status = payload?.status || 'offline';
+    const presentation = getSystemHealthPresentation(status);
+    const issueText = Array.isArray(payload?.issues) && payload.issues.length > 0
+        ? payload.issues.join(', ')
+        : 'no_issues';
+
+    elements.systemHealthBadge.textContent = presentation.text;
+    elements.systemHealthBadge.className = `status-badge ${presentation.className} system-badge`;
+    elements.systemHealthBadge.title = `uptime=${payload?.uptime_hms || '--'} issues=${issueText}`;
+
+    if (lastSystemHealthStatus !== status) {
+        addLog(
+            status === 'offline' ? 'warning' : 'info',
+            `[系统] 健康状态已切换: ${presentation.text}`
+        );
+        lastSystemHealthStatus = status;
+    }
+}
+
+async function refreshSystemHealth() {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), SYSTEM_HEARTBEAT_TIMEOUT_MS);
+
+    try {
+        const response = await fetch('/api/system/health', {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const payload = await response.json();
+        updateSystemHealthBadge(payload);
+    } catch (error) {
+        updateSystemHealthBadge({
+            status: 'offline',
+            issues: ['health_endpoint_unreachable'],
+            uptime_hms: '--',
+        });
+        if (error.name !== 'AbortError') {
+            console.error('系统健康检查失败:', error);
+        }
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
+function startSystemHeartbeat() {
+    if (systemHeartbeatInterval) {
+        clearInterval(systemHeartbeatInterval);
+    }
+
+    systemHeartbeatInterval = setInterval(() => {
+        refreshSystemHealth();
+    }, SYSTEM_HEARTBEAT_INTERVAL_MS);
+}
+
 // 开始注册
 async function handleStartRegistration(e) {
     e.preventDefault();
+
+    if (registrationConfigLocked) {
+        toast.warning('任务运行中，当前配置已锁定');
+        return;
+    }
 
     const selectedValue = elements.emailService.value;
     if (!selectedValue) {
@@ -491,9 +611,7 @@ async function handleStartRegistration(e) {
 
     const [emailServiceType, serviceId] = selectedValue.split(':');
 
-    // 禁用开始按钮
-    elements.startBtn.disabled = true;
-    elements.cancelBtn.disabled = false;
+    setRegistrationConfigLock(true);
 
     // 清空日志
     elements.consoleLog.innerHTML = '';
@@ -906,7 +1024,8 @@ function updateTaskStatus(status) {
         running: { text: '运行中', class: 'running' },
         completed: { text: '已完成', class: 'completed' },
         failed: { text: '失败', class: 'failed' },
-        cancelled: { text: '已取消', class: 'disabled' }
+        cancelled: { text: '已取消', class: 'disabled' },
+        cancelling: { text: '取消中', class: 'warning' }
     };
 
     const info = statusInfo[status] || { text: status, class: '' };
@@ -1054,10 +1173,9 @@ function addLog(type, message) {
     // 自动滚动到底部
     elements.consoleLog.scrollTop = elements.consoleLog.scrollHeight;
 
-    // 限制日志行数
-    const lines = elements.consoleLog.querySelectorAll('.log-line');
-    if (lines.length > 500) {
-        lines[0].remove();
+    // 物理裁剪 DOM 节点，避免长时间运行导致内存堆积
+    while (elements.consoleLog.childElementCount > MAX_LOG_DOM_NODES) {
+        elements.consoleLog.firstElementChild?.remove();
     }
 }
 
@@ -1080,8 +1198,7 @@ function getLogType(log) {
 
 // 重置按钮状态
 function resetButtons() {
-    elements.startBtn.disabled = false;
-    elements.cancelBtn.disabled = true;
+    setRegistrationConfigLock(false);
     currentTask = null;
     currentBatch = null;
     // 注意：不重置 isBatchMode，因为用户可能想继续使用批量模式
@@ -1205,9 +1322,7 @@ async function handleOutlookBatchRegistration() {
     const concurrency = parseInt(elements.outlookConcurrencyCount.value) || 3;
     const mode = elements.outlookConcurrencyMode.value || 'pipeline';
 
-    // 禁用开始按钮
-    elements.startBtn.disabled = true;
-    elements.cancelBtn.disabled = false;
+    setRegistrationConfigLock(true);
 
     // 清空日志
     elements.consoleLog.innerHTML = '';
@@ -1510,8 +1625,7 @@ async function restoreActiveTask() {
             taskFinalStatus = null;
             toastShown = false;
             displayedLogs.clear();
-            elements.startBtn.disabled = true;
-            elements.cancelBtn.disabled = false;
+            setRegistrationConfigLock(true);
             showTaskStatus(data);
             updateTaskStatus(data.status);
             addLog('info', `[系统] 检测到进行中的任务，正在重连监控... (${task_uuid.substring(0, 8)})`);
@@ -1538,8 +1652,7 @@ async function restoreActiveTask() {
             batchFinalStatus = null;
             toastShown = false;
             displayedLogs.clear();
-            elements.startBtn.disabled = true;
-            elements.cancelBtn.disabled = false;
+            setRegistrationConfigLock(true);
             showBatchStatus({ count: total || data.total });
             updateBatchProgress(data);
             addLog('info', `[系统] 检测到进行中的批量任务，正在重连监控... (${batch_id.substring(0, 8)})`);

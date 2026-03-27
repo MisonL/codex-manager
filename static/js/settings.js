@@ -39,6 +39,13 @@ const elements = {
     confirmBatchImportProxyBtn: document.getElementById('confirm-batch-import-proxy-btn'),
     addProxyModal: document.getElementById('add-proxy-modal'),
     proxyItemForm: document.getElementById('proxy-item-form'),
+    proxyItemId: document.getElementById('proxy-item-id'),
+    proxyItemName: document.getElementById('proxy-item-name'),
+    proxyItemType: document.getElementById('proxy-item-type'),
+    proxyItemHost: document.getElementById('proxy-item-host'),
+    proxyItemPort: document.getElementById('proxy-item-port'),
+    proxyItemUsername: document.getElementById('proxy-item-username'),
+    proxyItemPassword: document.getElementById('proxy-item-password'),
     closeProxyModal: document.getElementById('close-proxy-modal'),
     cancelProxyBtn: document.getElementById('cancel-proxy-btn'),
     proxyModalTitle: document.getElementById('proxy-modal-title'),
@@ -89,23 +96,70 @@ const elements = {
 
 // 选中的服务 ID
 let selectedServiceIds = new Set();
+const loadedTabs = new Set();
+const settingsTabLoaders = {
+    proxy: async () => {
+        await loadProxies();
+    },
+    upload: async () => {
+        await Promise.all([loadCpaServices(), loadSub2ApiServices(), loadTmServices(), loadNewapiServices()]);
+    },
+    outlook: async () => {
+        await loadOutlookSettings();
+    },
+    database: async () => {
+        await loadDatabaseInfo();
+    }
+};
+const controlAutocompleteMap = {
+    'dynamic-proxy-api-url': 'url',
+    'dynamic-proxy-api-key': 'off',
+    'dynamic-proxy-api-key-header': 'off',
+    'dynamic-proxy-result-field': 'off',
+    'webui-access-password': 'new-password',
+    'proxy-item-name': 'off',
+    'proxy-item-host': 'off',
+    'proxy-item-port': 'off',
+    'proxy-item-username': 'off',
+    'proxy-item-password': 'off',
+    'tm-service-name': 'off',
+    'tm-service-url': 'url',
+    'tm-service-key': 'off',
+    'tm-service-priority': 'off',
+    'sub2api-service-name': 'off',
+    'sub2api-service-url': 'url',
+    'sub2api-service-key': 'off',
+    'sub2api-service-priority': 'off',
+    'cpa-service-name': 'off',
+    'cpa-service-url': 'url',
+    'cpa-service-token': 'off',
+    'cpa-service-priority': 'off',
+    'outlook-default-client-id': 'off',
+    'max-retries': 'off',
+    'timeout': 'off',
+    'password-length': 'off',
+    'sleep-min': 'off',
+    'sleep-max': 'off',
+    'email-code-timeout': 'off',
+    'email-code-poll-interval': 'off'
+};
+const syncProxyFormStateDebounced = debounce(() => {
+    window.requestAnimationFrame(syncProxyFormState);
+}, 120);
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
     initTabs();
     loadSettings();
     loadEmailServices();
-    loadDatabaseInfo();
-    loadProxies();
-    loadCpaServices();
-    loadSub2ApiServices();
-    loadTmServices();
-    loadNewapiServices();
     initEventListeners();
+    initProxyFormPerformance();
+    applyFormAccessibility();
+    ensureTabDataLoaded(getActiveTabName());
 });
 
 document.addEventListener('click', () => {
-    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+    closeActiveSettingsMoreMenus();
 });
 
 // 初始化标签页
@@ -119,6 +173,7 @@ function initTabs() {
 
             btn.classList.add('active');
             document.getElementById(`${tab}-tab`).classList.add('active');
+            ensureTabDataLoaded(tab);
         });
     });
 }
@@ -251,6 +306,9 @@ function initEventListeners() {
     if (elements.testAllProxiesBtn) {
         elements.testAllProxiesBtn.addEventListener('click', handleTestAllProxies);
     }
+    if (elements.deleteDisabledProxiesBtn) {
+        elements.deleteDisabledProxiesBtn.addEventListener('click', handleDeleteDisabledProxies);
+    }
 
     if (elements.closeProxyModal) {
         elements.closeProxyModal.addEventListener('click', closeProxyModal);
@@ -377,6 +435,139 @@ function initEventListeners() {
     }
 }
 
+function getFormLockTargets(form) {
+    if (!form) {
+        return [];
+    }
+    return Array.from(form.querySelectorAll('input, select, textarea, button'));
+}
+
+async function withFormLock(form, action) {
+    const controls = getFormLockTargets(form);
+    controls.forEach(control => {
+        control.disabled = true;
+    });
+    form?.classList.add('is-locked');
+
+    try {
+        return await action();
+    } finally {
+        controls.forEach(control => {
+            control.disabled = false;
+        });
+        form?.classList.remove('is-locked');
+    }
+}
+
+function getActiveTabName() {
+    const activeTab = document.querySelector('.tab-btn.active');
+    return activeTab?.dataset.tab || 'proxy';
+}
+
+async function ensureTabDataLoaded(tab) {
+    if (!tab || loadedTabs.has(tab)) {
+        return;
+    }
+
+    const loader = settingsTabLoaders[tab];
+    if (!loader) {
+        loadedTabs.add(tab);
+        return;
+    }
+
+    try {
+        await loader();
+        loadedTabs.add(tab);
+    } catch (error) {
+        console.error(`加载 ${tab} 标签数据失败:`, error);
+    }
+}
+
+function getControlLabelText(control) {
+    if (control.labels && control.labels.length > 0) {
+        const labelText = Array.from(control.labels)
+            .map(label => label.textContent.replace(/\s+/g, ' ').trim())
+            .find(Boolean);
+        if (labelText) {
+            return labelText;
+        }
+    }
+
+    const placeholder = control.getAttribute('placeholder');
+    if (placeholder) {
+        return placeholder.trim();
+    }
+
+    const title = control.getAttribute('title');
+    if (title) {
+        return title.trim();
+    }
+
+    const name = control.getAttribute('name');
+    return name ? name.trim() : '';
+}
+
+function applyFormAccessibility(root = document) {
+    root.querySelectorAll('input, select, textarea').forEach(control => {
+        if (control.type === 'hidden') {
+            return;
+        }
+
+        const labelText = getControlLabelText(control);
+        if (labelText && !control.getAttribute('aria-label')) {
+            control.setAttribute('aria-label', labelText);
+        }
+
+        const autocomplete = controlAutocompleteMap[control.id];
+        if (autocomplete && !control.getAttribute('autocomplete')) {
+            control.setAttribute('autocomplete', autocomplete);
+        }
+    });
+
+    root.querySelectorAll('.modal-close').forEach(button => {
+        if (!button.getAttribute('aria-label')) {
+            button.setAttribute('aria-label', '关闭窗口');
+        }
+    });
+}
+
+function readProxyFormState() {
+    return {
+        name: elements.proxyItemName?.value.trim() || '',
+        host: elements.proxyItemHost?.value.trim() || '',
+        port: Number.parseInt(elements.proxyItemPort?.value || '', 10)
+    };
+}
+
+function syncProxyFormState() {
+    const submitButton = elements.proxyItemForm?.querySelector('button[type="submit"]');
+    if (!submitButton) {
+        return;
+    }
+
+    const { name, host, port } = readProxyFormState();
+    const isValid = Boolean(name && host && Number.isInteger(port) && port > 0 && port <= 65535);
+    submitButton.disabled = !isValid;
+}
+
+function initProxyFormPerformance() {
+    const proxyControls = [
+        elements.proxyItemName,
+        elements.proxyItemType,
+        elements.proxyItemHost,
+        elements.proxyItemPort,
+        elements.proxyItemUsername,
+        elements.proxyItemPassword
+    ].filter(Boolean);
+
+    proxyControls.forEach(control => {
+        const eventName = control.tagName === 'SELECT' ? 'change' : 'input';
+        control.addEventListener(eventName, syncProxyFormStateDebounced);
+    });
+
+    syncProxyFormState();
+}
+
 // 加载设置
 async function loadSettings() {
     try {
@@ -400,9 +591,6 @@ async function loadSettings() {
             document.getElementById('email-code-timeout').value = data.email_code.timeout || 120;
             document.getElementById('email-code-poll-interval').value = data.email_code.poll_interval || 3;
         }
-
-        // 加载 Outlook 设置
-        loadOutlookSettings();
 
         // Web UI 访问密码提示
         if (data.webui?.has_access_password) {
@@ -428,14 +616,16 @@ async function handleSaveWebuiSettings(e) {
         access_password: accessPassword || null
     };
 
-    try {
-        await api.post('/settings/webui', payload);
-        toast.success('Web UI 设置已更新');
-        document.getElementById('webui-access-password').value = '';
-    } catch (error) {
-        console.error('保存 Web UI 设置失败:', error);
-        toast.error('保存 Web UI 设置失败');
-    }
+    await withFormLock(elements.webuiSettingsForm, async () => {
+        try {
+            await api.post('/settings/webui', payload);
+            toast.success('Web UI 设置已更新');
+            document.getElementById('webui-access-password').value = '';
+        } catch (error) {
+            console.error('保存 Web UI 设置失败:', error);
+            toast.error('保存 Web UI 设置失败');
+        }
+    });
 }
 
 // 加载邮箱服务
@@ -538,12 +728,14 @@ async function handleSaveRegistration(e) {
         sleep_max: parseInt(document.getElementById('sleep-max').value),
     };
 
-    try {
-        await api.post('/settings/registration', data);
-        toast.success('注册配置已保存');
-    } catch (error) {
-        toast.error('保存失败: ' + error.message);
-    }
+    await withFormLock(elements.registrationForm, async () => {
+        try {
+            await api.post('/settings/registration', data);
+            toast.success('注册配置已保存');
+        } catch (error) {
+            toast.error('保存失败: ' + error.message);
+        }
+    });
 }
 
 // 保存验证码等待配置
@@ -568,12 +760,14 @@ async function handleSaveEmailCode(e) {
         poll_interval: pollInterval
     };
 
-    try {
-        await api.post('/settings/email-code', data);
-        toast.success('验证码配置已保存');
-    } catch (error) {
-        toast.error('保存失败: ' + error.message);
-    }
+    await withFormLock(elements.emailCodeForm, async () => {
+        try {
+            await api.post('/settings/email-code', data);
+            toast.success('验证码配置已保存');
+        } catch (error) {
+            toast.error('保存失败: ' + error.message);
+        }
+    });
 }
 
 // 备份数据库
@@ -631,9 +825,12 @@ async function loadServiceConfigFields(serviceType) {
                        name="${field.name}"
                        value="${field.default || ''}"
                        placeholder="${field.label}"
+                       aria-label="${field.label}"
+                       autocomplete="off"
                        ${field.required ? 'required' : ''}>
             </div>
         `).join('');
+        applyFormAccessibility(elements.serviceConfigFields);
 
     } catch (error) {
         console.error('加载配置字段失败:', error);
@@ -659,15 +856,17 @@ async function handleAddService(e) {
         priority: 0,
     };
 
-    try {
-        await api.post('/email-services', data);
-        toast.success('邮箱服务已添加');
-        elements.addServiceModal.classList.remove('active');
-        elements.addServiceForm.reset();
-        loadEmailServices();
-    } catch (error) {
-        toast.error('添加失败: ' + error.message);
-    }
+    await withFormLock(elements.addServiceForm, async () => {
+        try {
+            await api.post('/email-services', data);
+            toast.success('邮箱服务已添加');
+            elements.addServiceModal.classList.remove('active');
+            elements.addServiceForm.reset();
+            loadEmailServices();
+        } catch (error) {
+            toast.error('添加失败: ' + error.message);
+        }
+    });
 }
 
 // 测试服务
@@ -847,6 +1046,16 @@ async function loadProxies() {
 
 // 渲染代理列表
 function renderProxies(proxies) {
+    const disabledCount = Array.isArray(proxies)
+        ? proxies.filter(proxy => !proxy.enabled).length
+        : 0;
+    if (elements.deleteDisabledProxiesBtn) {
+        elements.deleteDisabledProxiesBtn.disabled = disabledCount === 0;
+        elements.deleteDisabledProxiesBtn.textContent = disabledCount > 0
+            ? `🧹 删除禁用项 (${disabledCount})`
+            : '🧹 删除禁用项';
+    }
+
     if (!proxies || proxies.length === 0) {
         elements.proxiesTable.innerHTML = `
             <tr>
@@ -880,13 +1089,13 @@ function renderProxies(proxies) {
                 <div style="display:flex;gap:4px;align-items:center;white-space:nowrap;">
                     <button class="btn btn-secondary btn-sm" onclick="editProxyItem(${proxy.id})">编辑</button>
                     <div class="dropdown" style="position:relative;">
-                        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();toggleSettingsMoreMenu(this)">更多</button>
+                        <button class="btn btn-secondary btn-sm" onclick="toggleSettingsMoreMenu(event, this)">更多</button>
                         <div class="dropdown-menu" style="min-width:80px;">
-                            <a href="#" class="dropdown-item" onclick="event.preventDefault();closeSettingsMoreMenu(this);testProxyItem(${proxy.id})">测试</a>
-                            <a href="#" class="dropdown-item" onclick="event.preventDefault();closeSettingsMoreMenu(this);toggleProxyItem(${proxy.id}, ${!proxy.enabled})">${proxy.enabled ? '禁用' : '启用'}</a>
+                            <a href="#" class="dropdown-item" onclick="closeSettingsMoreMenu(event, this);testProxyItem(${proxy.id})">测试</a>
+                            <a href="#" class="dropdown-item" onclick="closeSettingsMoreMenu(event, this);toggleProxyItem(${proxy.id}, ${!proxy.enabled})">${proxy.enabled ? '禁用' : '启用'}</a>
                             ${proxy.is_default
-                                ? `<a href="#" class="dropdown-item" onclick="event.preventDefault();closeSettingsMoreMenu(this);handleUnsetProxyDefault(${proxy.id})">取消默认</a>`
-                                : `<a href="#" class="dropdown-item" onclick="event.preventDefault();closeSettingsMoreMenu(this);handleSetProxyDefault(${proxy.id})">设为默认</a>`
+                                ? `<a href="#" class="dropdown-item" onclick="closeSettingsMoreMenu(event, this);handleUnsetProxyDefault(${proxy.id})">取消默认</a>`
+                                : `<a href="#" class="dropdown-item" onclick="closeSettingsMoreMenu(event, this);handleSetProxyDefault(${proxy.id})">设为默认</a>`
                             }
                         </div>
                     </div>
@@ -897,16 +1106,109 @@ function renderProxies(proxies) {
     `).join('');
 }
 
-function toggleSettingsMoreMenu(btn) {
-    const menu = btn.nextElementSibling;
-    const isActive = menu.classList.contains('active');
-    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
-    if (!isActive) menu.classList.add('active');
+function showSettingsMenuPositionError(message) {
+    if (typeof toast !== 'undefined' && typeof toast.error === 'function') {
+        toast.error(message);
+    }
 }
 
-function closeSettingsMoreMenu(el) {
-    const menu = el.closest('.dropdown-menu');
-    if (menu) menu.classList.remove('active');
+function resetSettingsMoreMenuPosition(menu, dropdown = menu?.closest('.dropdown')) {
+    if (dropdown) {
+        dropdown.classList.remove('dropup', 'dropdown-overlay');
+    }
+    menu.style.removeProperty('top');
+    menu.style.removeProperty('left');
+    menu.style.removeProperty('visibility');
+}
+
+function closeActiveSettingsMoreMenus(exceptMenu = null) {
+    document.querySelectorAll('#proxies-table .dropdown-menu.active').forEach(menu => {
+        if (menu === exceptMenu) {
+            return;
+        }
+        menu.classList.remove('active');
+        resetSettingsMoreMenuPosition(menu);
+    });
+}
+
+function positionSettingsMoreMenu(btn, menu) {
+    const dropdown = btn?.closest('.dropdown');
+    if (!dropdown) {
+        showSettingsMenuPositionError('代理菜单定位失败，已回退为默认位置');
+        resetSettingsMoreMenuPosition(menu, null);
+        return false;
+    }
+
+    try {
+        const buttonRect = btn.getBoundingClientRect();
+        const gap = 8;
+        const minBottomSpace = 200;
+        const menuWidth = Math.max(menu.offsetWidth, buttonRect.width, 120);
+        const maxLeft = Math.max(8, window.innerWidth - menuWidth - 8);
+        const rawLeft = Math.max(8, buttonRect.right - menuWidth);
+
+        if (!Number.isFinite(rawLeft) || !Number.isFinite(maxLeft)) {
+            throw new Error('菜单水平坐标计算失败');
+        }
+
+        const left = Math.min(rawLeft, maxLeft);
+        const shouldDropUp = window.innerHeight - buttonRect.bottom < minBottomSpace;
+
+        dropdown.classList.add('dropdown-overlay');
+        dropdown.classList.toggle('dropup', shouldDropUp);
+        dropdown.style.setProperty('--dropdown-anchor-top', `${Math.max(8, shouldDropUp ? buttonRect.top - gap : buttonRect.bottom + gap)}px`);
+        dropdown.style.setProperty('--dropdown-anchor-left', `${left}px`);
+        dropdown.style.setProperty('--dropdown-trigger-width', `${Math.ceil(buttonRect.width)}px`);
+        return true;
+    } catch (error) {
+        console.error('代理菜单定位失败:', error);
+        showSettingsMenuPositionError('代理菜单定位失败，已回退为默认位置');
+        resetSettingsMoreMenuPosition(menu, dropdown);
+        return false;
+    }
+}
+
+function toggleSettingsMoreMenu(event, btn) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+
+    const menu = btn?.nextElementSibling;
+    if (!menu || !menu.classList.contains('dropdown-menu')) {
+        showSettingsMenuPositionError('代理菜单结构异常，无法打开更多操作');
+        return;
+    }
+
+    if (menu.classList.contains('active')) {
+        closeSettingsMoreMenu(null, menu);
+        return;
+    }
+
+    closeActiveSettingsMoreMenus(menu);
+    menu.style.visibility = 'hidden';
+    menu.classList.add('active');
+    const positioned = positionSettingsMoreMenu(btn, menu);
+    requestAnimationFrame(() => {
+        if (menu.classList.contains('active') && positioned !== false) {
+            menu.style.visibility = 'visible';
+        }
+    });
+}
+
+function closeSettingsMoreMenu(event, el) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+
+    const menu = el?.classList?.contains('dropdown-menu') ? el : el?.closest('.dropdown-menu');
+    if (!menu) {
+        return;
+    }
+
+    menu.classList.remove('active');
+    resetSettingsMoreMenuPosition(menu);
 }
 
 // 设为默认代理
@@ -955,54 +1257,63 @@ function openProxyModal(proxy = null) {
     elements.proxyModalTitle.textContent = proxy ? '编辑代理' : '添加代理';
     elements.proxyItemForm.reset();
 
-    document.getElementById('proxy-item-id').value = proxy ? proxy.id : '';
+    elements.proxyItemId.value = proxy ? proxy.id : '';
 
     if (proxy) {
-        document.getElementById('proxy-item-name').value = proxy.name || '';
-        document.getElementById('proxy-item-type').value = proxy.type || 'http';
-        document.getElementById('proxy-item-host').value = proxy.host || '';
-        document.getElementById('proxy-item-port').value = proxy.port || '';
-        document.getElementById('proxy-item-username').value = proxy.username || '';
-        document.getElementById('proxy-item-password').value = '';
+        elements.proxyItemName.value = proxy.name || '';
+        elements.proxyItemType.value = proxy.type || 'http';
+        elements.proxyItemHost.value = proxy.host || '';
+        elements.proxyItemPort.value = proxy.port || '';
+        elements.proxyItemUsername.value = proxy.username || '';
+        elements.proxyItemPassword.value = '';
     }
 
     elements.addProxyModal.classList.add('active');
+    applyFormAccessibility(elements.addProxyModal);
+    syncProxyFormState();
+    const firstField = proxy ? elements.proxyItemHost : elements.proxyItemName;
+    if (firstField) {
+        window.requestAnimationFrame(() => firstField.focus({ preventScroll: true }));
+    }
 }
 
 // 关闭代理模态框
 function closeProxyModal() {
     elements.addProxyModal.classList.remove('active');
     elements.proxyItemForm.reset();
+    syncProxyFormState();
 }
 
 // 保存代理
 async function handleSaveProxyItem(e) {
     e.preventDefault();
 
-    const proxyId = document.getElementById('proxy-item-id').value;
+    const proxyId = elements.proxyItemId.value;
     const data = {
-        name: document.getElementById('proxy-item-name').value,
-        type: document.getElementById('proxy-item-type').value,
-        host: document.getElementById('proxy-item-host').value,
-        port: parseInt(document.getElementById('proxy-item-port').value),
-        username: document.getElementById('proxy-item-username').value || null,
-        password: document.getElementById('proxy-item-password').value || null,
+        name: elements.proxyItemName.value.trim(),
+        type: elements.proxyItemType.value,
+        host: elements.proxyItemHost.value.trim(),
+        port: parseInt(elements.proxyItemPort.value, 10),
+        username: elements.proxyItemUsername.value.trim() || null,
+        password: elements.proxyItemPassword.value || null,
         enabled: true
     };
 
-    try {
-        if (proxyId) {
-            await api.patch(`/settings/proxies/${proxyId}`, data);
-            toast.success('代理已更新');
-        } else {
-            await api.post('/settings/proxies', data);
-            toast.success('代理已添加');
+    await withFormLock(elements.proxyItemForm, async () => {
+        try {
+            if (proxyId) {
+                await api.patch(`/settings/proxies/${proxyId}`, data);
+                toast.success('代理已更新');
+            } else {
+                await api.post('/settings/proxies', data);
+                toast.success('代理已添加');
+            }
+            closeProxyModal();
+            loadProxies();
+        } catch (error) {
+            toast.error('保存失败: ' + error.message);
         }
-        closeProxyModal();
-        loadProxies();
-    } catch (error) {
-        toast.error('保存失败: ' + error.message);
-    }
+    });
 }
 
 // 编辑代理
@@ -1072,6 +1383,28 @@ async function handleTestAllProxies() {
     }
 }
 
+async function handleDeleteDisabledProxies() {
+    if (elements.deleteDisabledProxiesBtn?.disabled) {
+        return;
+    }
+
+    const confirmed = await confirm('确定要删除所有已禁用代理吗？');
+    if (!confirmed) return;
+
+    const button = elements.deleteDisabledProxiesBtn;
+    button.disabled = true;
+    button.innerHTML = '<span class="loading-spinner"></span> 删除中...';
+
+    try {
+        const result = await api.delete('/settings/proxies/disabled');
+        toast.success(result.message || `已删除 ${result.deleted_count || 0} 个禁用代理`);
+        loadProxies();
+    } catch (error) {
+        toast.error('删除失败: ' + error.message);
+        loadProxies();
+    }
+}
+
 
 // ============================================================================
 // Outlook 设置管理
@@ -1094,12 +1427,14 @@ async function handleSaveOutlookSettings(e) {
     const data = {
         default_client_id: document.getElementById('outlook-default-client-id').value
     };
-    try {
-        await api.post('/settings/outlook', data);
-        toast.success('Outlook 设置已保存');
-    } catch (error) {
-        toast.error('保存失败: ' + error.message);
-    }
+    await withFormLock(elements.outlookSettingsForm, async () => {
+        try {
+            await api.post('/settings/outlook', data);
+            toast.success('Outlook 设置已保存');
+        } catch (error) {
+            toast.error('保存失败: ' + error.message);
+        }
+    });
 }
 
 // ============== 动态代理设置 ==============
@@ -1113,13 +1448,15 @@ async function handleSaveDynamicProxy(e) {
         api_key_header: document.getElementById('dynamic-proxy-api-key-header').value.trim() || 'X-API-Key',
         result_field: document.getElementById('dynamic-proxy-result-field').value.trim()
     };
-    try {
-        await api.post('/settings/proxy/dynamic', data);
-        toast.success('动态代理设置已保存');
-        document.getElementById('dynamic-proxy-api-key').value = '';
-    } catch (error) {
-        toast.error('保存失败: ' + error.message);
-    }
+    await withFormLock(elements.dynamicProxyForm, async () => {
+        try {
+            await api.post('/settings/proxy/dynamic', data);
+            toast.success('动态代理设置已保存');
+            document.getElementById('dynamic-proxy-api-key').value = '';
+        } catch (error) {
+            toast.error('保存失败: ' + error.message);
+        }
+    });
 }
 
 async function handleTestDynamicProxy() {
@@ -1230,23 +1567,25 @@ async function handleSaveTmService(e) {
         return;
     }
 
-    try {
-        const payload = { name, api_url: apiUrl, priority, enabled };
-        if (apiKey) payload.api_key = apiKey;
+    await withFormLock(elements.tmServiceForm, async () => {
+        try {
+            const payload = { name, api_url: apiUrl, priority, enabled };
+            if (apiKey) payload.api_key = apiKey;
 
-        if (id) {
-            await api.patch(`/tm-services/${id}`, payload);
-            toast.success('服务已更新');
-        } else {
-            payload.api_key = apiKey;
-            await api.post('/tm-services', payload);
-            toast.success('服务已添加');
+            if (id) {
+                await api.patch(`/tm-services/${id}`, payload);
+                toast.success('服务已更新');
+            } else {
+                payload.api_key = apiKey;
+                await api.post('/tm-services', payload);
+                toast.success('服务已添加');
+            }
+            closeTmServiceModal();
+            loadTmServices();
+        } catch (e) {
+            toast.error('保存失败: ' + e.message);
         }
-        closeTmServiceModal();
-        loadTmServices();
-    } catch (e) {
-        toast.error('保存失败: ' + e.message);
-    }
+    });
 }
 
 async function deleteTmService(id, name) {
@@ -1538,23 +1877,25 @@ async function handleSaveCpaService(e) {
         return;
     }
 
-    try {
-        const payload = { name, api_url: apiUrl, priority, enabled, include_proxy_url: includeProxyUrl };
-        if (apiToken) payload.api_token = apiToken;
+    await withFormLock(elements.cpaServiceForm, async () => {
+        try {
+            const payload = { name, api_url: apiUrl, priority, enabled, include_proxy_url: includeProxyUrl };
+            if (apiToken) payload.api_token = apiToken;
 
-        if (id) {
-            await api.patch(`/cpa-services/${id}`, payload);
-            toast.success('服务已更新');
-        } else {
-            payload.api_token = apiToken;
-            await api.post('/cpa-services', payload);
-            toast.success('服务已添加');
+            if (id) {
+                await api.patch(`/cpa-services/${id}`, payload);
+                toast.success('服务已更新');
+            } else {
+                payload.api_token = apiToken;
+                await api.post('/cpa-services', payload);
+                toast.success('服务已添加');
+            }
+            closeCpaServiceModal();
+            loadCpaServices();
+        } catch (e) {
+            toast.error('保存失败: ' + e.message);
         }
-        closeCpaServiceModal();
-        loadCpaServices();
-    } catch (e) {
-        toast.error('保存失败: ' + e.message);
-    }
+    });
 }
 
 async function deleteCpaService(id, name) {
@@ -1716,19 +2057,21 @@ async function handleSaveSub2ApiService(e) {
     }
     if (!data.api_key) delete data.api_key;
 
-    try {
-        if (id) {
-            await api.patch(`/sub2api-services/${id}`, data);
-            toast.success('服务已更新');
-        } else {
-            await api.post('/sub2api-services', data);
-            toast.success('服务已添加');
+    await withFormLock(elements.sub2ApiServiceForm, async () => {
+        try {
+            if (id) {
+                await api.patch(`/sub2api-services/${id}`, data);
+                toast.success('服务已更新');
+            } else {
+                await api.post('/sub2api-services', data);
+                toast.success('服务已添加');
+            }
+            closeSub2ApiServiceModal();
+            loadSub2ApiServices();
+        } catch (e) {
+            toast.error('保存失败: ' + e.message);
         }
-        closeSub2ApiServiceModal();
-        loadSub2ApiServices();
-    } catch (e) {
-        toast.error('保存失败: ' + e.message);
-    }
+    });
 }
 
 async function testSub2ApiServiceById(id) {

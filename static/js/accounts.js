@@ -13,6 +13,16 @@ let selectAllPages = false;  // 是否选中了全部页
 let currentFilters = { status: '', email_service: '', search: '' };  // 当前筛选条件
 const refreshingAccountIds = new Set();
 let isBatchValidating = false;
+const ACCOUNT_TABLE_COLUMN_COUNT = 11;
+const accountActionLabels = {
+    refreshList: '刷新列表',
+    refreshToken: '刷新 Token',
+    validateToken: '验证 Token',
+    checkSubscription: '检测订阅',
+    refreshingToken: '刷新 Token 中...',
+    validatingToken: '验证 Token 中...',
+    checkingSubscription: '检测订阅中...'
+};
 
 // DOM 元素
 const elements = {
@@ -50,6 +60,38 @@ document.addEventListener('DOMContentLoaded', () => {
     renderSelectAllBanner();
 });
 
+function setAccountsModalOpen(modal, open) {
+    if (!modal) {
+        return;
+    }
+    modal.classList.toggle('active', open);
+}
+
+function closeAccountsModalById(modalId) {
+    const modal = document.getElementById(modalId);
+    setAccountsModalOpen(modal, false);
+}
+
+function bindSimpleModal(modalId, closeButtonIds = []) {
+    const modal = document.getElementById(modalId);
+    if (!modal) {
+        return;
+    }
+
+    closeButtonIds.forEach((buttonId) => {
+        const button = document.getElementById(buttonId);
+        if (button) {
+            button.addEventListener('click', () => closeAccountsModalById(modalId));
+        }
+    });
+
+    modal.addEventListener('click', (event) => {
+        if (event.target === modal) {
+            closeAccountsModalById(modalId);
+        }
+    });
+}
+
 // 事件监听
 function initEventListeners() {
     // 筛选
@@ -86,7 +128,7 @@ function initEventListeners() {
     elements.refreshBtn.addEventListener('click', () => {
         loadStats();
         loadAccounts();
-        toast.info('已刷新');
+        toast.info('已刷新列表');
     });
 
     // 批量刷新Token
@@ -117,18 +159,7 @@ function initEventListeners() {
     if (codexAuthBtn) {
         codexAuthBtn.addEventListener('click', handleCodexAuthLogin);
     }
-    const closeCodexAuthModal = document.getElementById('close-codex-auth-modal');
-    if (closeCodexAuthModal) {
-        closeCodexAuthModal.addEventListener('click', () => {
-            document.getElementById('codex-auth-modal').classList.remove('active');
-        });
-    }
-    const closeCodexAuthModalBtn = document.getElementById('close-codex-auth-modal-btn');
-    if (closeCodexAuthModalBtn) {
-        closeCodexAuthModalBtn.addEventListener('click', () => {
-            document.getElementById('codex-auth-modal').classList.remove('active');
-        });
-    }
+    bindSimpleModal('codex-auth-modal', ['close-codex-auth-modal', 'close-codex-auth-modal-btn']);
 
     // 全选（当前页）
     elements.selectAll.addEventListener('change', (e) => {
@@ -178,22 +209,21 @@ function initEventListeners() {
         elements.exportMenu.classList.remove('active');
     });
 
-    // 关闭模态框
-    elements.closeModal.addEventListener('click', () => {
-        elements.detailModal.classList.remove('active');
-    });
-
-    elements.detailModal.addEventListener('click', (e) => {
-        if (e.target === elements.detailModal) {
-            elements.detailModal.classList.remove('active');
-        }
-    });
+    bindSimpleModal('detail-modal', ['close-modal']);
 
     // 点击其他地方关闭下拉菜单
     document.addEventListener('click', () => {
         elements.exportMenu.classList.remove('active');
         uploadMenu.classList.remove('active');
-        document.querySelectorAll('#accounts-table .dropdown-menu.active').forEach(m => m.classList.remove('active'));
+        closeActiveMoreMenus();
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') {
+            return;
+        }
+        closeAccountsModalById('detail-modal');
+        closeAccountsModalById('codex-auth-modal');
     });
 }
 
@@ -231,7 +261,7 @@ async function loadAccounts() {
     // 显示加载状态
     elements.table.innerHTML = `
         <tr>
-            <td colspan="9">
+            <td colspan="${ACCOUNT_TABLE_COLUMN_COUNT}">
                 <div class="empty-state">
                     <div class="skeleton skeleton-text" style="width: 60%;"></div>
                     <div class="skeleton skeleton-text" style="width: 80%;"></div>
@@ -272,7 +302,7 @@ async function loadAccounts() {
         console.error('加载账号列表失败:', error);
         elements.table.innerHTML = `
             <tr>
-                <td colspan="9">
+                <td colspan="${ACCOUNT_TABLE_COLUMN_COUNT}">
                     <div class="empty-state">
                         <div class="empty-state-icon">❌</div>
                         <div class="empty-state-title">加载失败</div>
@@ -287,11 +317,24 @@ async function loadAccounts() {
 }
 
 // 渲染账号列表
+function buildAccountMoreMenu(account) {
+    const menuItems = [
+        { label: '刷新 Token', action: `refreshToken(${account.id})` },
+        { label: '上传', action: `uploadAccount(${account.id})` },
+        { label: '标记订阅', action: `markSubscription(${account.id})` },
+        { label: '收件箱校验', action: `checkInboxCode(${account.id})` },
+    ];
+
+    return menuItems.map(item => `
+        <a href="#" class="dropdown-item" onclick="closeMoreMenu(event, this);${item.action}">${item.label}</a>
+    `).join('');
+}
+
 function renderAccounts(accounts) {
     if (accounts.length === 0) {
         elements.table.innerHTML = `
             <tr>
-                <td colspan="9">
+                <td colspan="${ACCOUNT_TABLE_COLUMN_COUNT}">
                     <div class="empty-state">
                         <div class="empty-state-icon">📭</div>
                         <div class="empty-state-title">暂无数据</div>
@@ -352,12 +395,9 @@ function renderAccounts(accounts) {
                 <div style="display:flex;gap:4px;align-items:center;white-space:nowrap;">
                     <button class="btn btn-secondary btn-sm" onclick="viewAccount(${account.id})">详情</button>
                     <div class="dropdown" style="position:relative;">
-                        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();toggleMoreMenu(this)">更多</button>
-                        <div class="dropdown-menu" style="min-width:100px;">
-                            <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);refreshToken(${account.id})">刷新</a>
-                            <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);uploadAccount(${account.id})">上传</a>
-                            <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);markSubscription(${account.id})">标记</a>
-                            <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);checkInboxCode(${account.id})">收件箱</a>
+                        <button class="btn btn-secondary btn-sm" onclick="toggleMoreMenu(event, this)">更多</button>
+                        <div class="dropdown-menu" style="min-width:132px;">
+                            ${buildAccountMoreMenu(account)}
                         </div>
                     </div>
                     <button class="btn btn-danger btn-sm" onclick="deleteAccount(${account.id}, '${escapeHtml(account.email)}')">删除</button>
@@ -508,13 +548,22 @@ function updateBatchButtons() {
     elements.exportBtn.disabled = count === 0;
 
     const codexAuthBtn = document.getElementById('codex-auth-login-btn');
-    if (codexAuthBtn) codexAuthBtn.disabled = count === 0;
+    if (codexAuthBtn) {
+        codexAuthBtn.disabled = count === 0;
+        codexAuthBtn.textContent = count > 0 ? `Codex Auth (${count})` : 'Codex Auth';
+    }
 
-    elements.batchDeleteBtn.textContent = count > 0 ? `删除 (${count})` : '删除';
-    elements.batchRefreshBtn.textContent = count > 0 ? `🔄 刷新 (${count})` : '🔄 刷新Token';
-    elements.batchValidateBtn.textContent = count > 0 ? `✅ 验证 (${count})` : '✅ 验证Token';
+    elements.batchDeleteBtn.textContent = count > 0 ? `删除 (${count})` : '批量删除';
+    elements.batchRefreshBtn.textContent = count > 0
+        ? `${accountActionLabels.refreshToken} (${count})`
+        : accountActionLabels.refreshToken;
+    elements.batchValidateBtn.textContent = count > 0
+        ? `${accountActionLabels.validateToken} (${count})`
+        : accountActionLabels.validateToken;
     elements.batchUploadBtn.textContent = count > 0 ? `☁️ 上传 (${count})` : '☁️ 上传';
-    elements.batchCheckSubBtn.textContent = count > 0 ? `🔍 检测 (${count})` : '🔍 检测订阅';
+    elements.batchCheckSubBtn.textContent = count > 0
+        ? `${accountActionLabels.checkSubscription} (${count})`
+        : accountActionLabels.checkSubscription;
 }
 
 // 刷新单个账号Token
@@ -526,11 +575,11 @@ async function refreshToken(id) {
     refreshingAccountIds.add(id);
 
     try {
-        toast.info('正在刷新Token...');
+        toast.info('正在刷新 Token...');
         const result = await api.post(`/accounts/${id}/refresh`);
 
         if (result.success) {
-            toast.success('Token刷新成功');
+            toast.success('Token 刷新成功');
             loadAccounts();
         } else {
             toast.error('刷新失败: ' + (result.error || '未知错误'));
@@ -547,11 +596,11 @@ async function handleBatchRefresh() {
     const count = getEffectiveCount();
     if (count === 0) return;
 
-    const confirmed = await confirm(`确定要刷新选中的 ${count} 个账号的Token吗？`);
+    const confirmed = await confirm(`确定要刷新选中的 ${count} 个账号的 Token 吗？`);
     if (!confirmed) return;
 
     elements.batchRefreshBtn.disabled = true;
-    elements.batchRefreshBtn.textContent = '刷新中...';
+    elements.batchRefreshBtn.textContent = accountActionLabels.refreshingToken;
 
     try {
         const result = await api.post('/accounts/batch-refresh', buildBatchPayload());
@@ -575,7 +624,7 @@ async function handleBatchValidate() {
     isBatchValidating = true;
 
     elements.batchValidateBtn.disabled = true;
-    elements.batchValidateBtn.textContent = '验证中...';
+    elements.batchValidateBtn.textContent = accountActionLabels.validatingToken;
 
     try {
         const result = await api.post('/accounts/batch-validate', buildBatchPayload(), { timeoutMs: 120000 });
@@ -681,7 +730,7 @@ async function viewAccount(id) {
             </div>
             <div style="margin-top: var(--spacing-lg); display: flex; gap: var(--spacing-sm);">
                 <button class="btn btn-primary" onclick="refreshToken(${id}); elements.detailModal.classList.remove('active');">
-                    🔄 刷新Token
+                    ${accountActionLabels.refreshToken}
                 </button>
             </div>
         `;
@@ -993,7 +1042,7 @@ async function handleBatchCheckSubscription() {
     if (!confirmed) return;
 
     elements.batchCheckSubBtn.disabled = true;
-    elements.batchCheckSubBtn.textContent = '检测中...';
+    elements.batchCheckSubBtn.textContent = accountActionLabels.checkingSubscription;
 
     try {
         const result = await api.post('/payment/accounts/batch-check-subscription', buildBatchPayload());
@@ -1256,14 +1305,16 @@ function selectNewapiService() {
         const closeBtn = document.getElementById('close-newapi-modal');
         const cancelBtn = document.getElementById('cancel-newapi-modal-btn');
         const autoBtn = document.getElementById('newapi-use-auto-btn');
+        let settled = false;
 
         listEl.innerHTML = '<div style="text-align:center;color:var(--text-muted)">加载中...</div>';
-        modal.classList.add('active');
+        setAccountsModalOpen(modal, true);
 
         let services = [];
         try {
             services = await api.get('/newapi-services?enabled=true');
         } catch (e) {
+            toast.warning('加载 NEWAPI 服务失败，可自动选择或稍后重试');
             services = [];
         }
 
@@ -1293,24 +1344,45 @@ function selectNewapiService() {
                 item.addEventListener('mouseenter', () => item.style.background = 'var(--surface-hover)');
                 item.addEventListener('mouseleave', () => item.style.background = '');
                 item.addEventListener('click', () => {
-                    cleanup();
-                    resolve({ service_id: parseInt(item.dataset.id) });
+                    settle({ service_id: parseInt(item.dataset.id) });
                 });
             });
         }
 
         function cleanup() {
-            modal.classList.remove('active');
+            setAccountsModalOpen(modal, false);
             closeBtn.removeEventListener('click', onCancel);
             cancelBtn.removeEventListener('click', onCancel);
             autoBtn.removeEventListener('click', onAuto);
+            modal.removeEventListener('click', onBackdropClose);
+            document.removeEventListener('keydown', onEscapeClose);
         }
-        function onCancel() { cleanup(); resolve(null); }
-        function onAuto() { cleanup(); resolve({ service_id: null }); }
+        function settle(value) {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            cleanup();
+            resolve(value);
+        }
+        function onCancel() { settle(null); }
+        function onAuto() { settle({ service_id: null }); }
+        function onBackdropClose(event) {
+            if (event.target === modal) {
+                settle(null);
+            }
+        }
+        function onEscapeClose(event) {
+            if (event.key === 'Escape') {
+                settle(null);
+            }
+        }
 
         closeBtn.addEventListener('click', onCancel);
         cancelBtn.addEventListener('click', onCancel);
         autoBtn.addEventListener('click', onAuto);
+        modal.addEventListener('click', onBackdropClose);
+        document.addEventListener('keydown', onEscapeClose);
     });
 }
 
@@ -1361,18 +1433,110 @@ async function handleBatchUploadNewapi() {
     }
 }
 
-// 更多菜单切换
-function toggleMoreMenu(btn) {
-    const menu = btn.nextElementSibling;
-    const isActive = menu.classList.contains('active');
-    // 关闭所有其他更多菜单
-    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
-    if (!isActive) menu.classList.add('active');
+function showMoreMenuPositionError(message) {
+    if (typeof toast !== 'undefined' && typeof toast.error === 'function') {
+        toast.error(message);
+    }
 }
 
-function closeMoreMenu(el) {
-    const menu = el.closest('.dropdown-menu');
-    if (menu) menu.classList.remove('active');
+function resetMoreMenuPosition(menu, dropdown = menu?.closest('.dropdown')) {
+    if (dropdown) {
+        dropdown.classList.remove('dropup', 'dropdown-overlay');
+    }
+    menu.style.removeProperty('top');
+    menu.style.removeProperty('left');
+    menu.style.removeProperty('visibility');
+}
+
+function closeActiveMoreMenus(exceptMenu = null) {
+    document.querySelectorAll('#accounts-table .dropdown-menu.active').forEach(menu => {
+        if (menu === exceptMenu) {
+            return;
+        }
+        menu.classList.remove('active');
+        resetMoreMenuPosition(menu);
+    });
+}
+
+function positionMoreMenu(btn, menu) {
+    const dropdown = btn?.closest('.dropdown');
+    if (!dropdown) {
+        showMoreMenuPositionError('账号菜单定位失败，已回退为默认位置');
+        resetMoreMenuPosition(menu, null);
+        return false;
+    }
+
+    try {
+        const buttonRect = btn.getBoundingClientRect();
+        const gap = 8;
+        const minBottomSpace = 200;
+        const menuWidth = Math.max(menu.offsetWidth, buttonRect.width, 120);
+        const maxLeft = Math.max(8, window.innerWidth - menuWidth - 8);
+        const rawLeft = Math.max(8, buttonRect.right - menuWidth);
+
+        if (!Number.isFinite(rawLeft) || !Number.isFinite(maxLeft)) {
+            throw new Error('菜单水平坐标计算失败');
+        }
+
+        const left = Math.min(rawLeft, maxLeft);
+        const shouldDropUp = window.innerHeight - buttonRect.bottom < minBottomSpace;
+
+        dropdown.classList.add('dropdown-overlay');
+        dropdown.classList.toggle('dropup', shouldDropUp);
+        dropdown.style.setProperty('--dropdown-anchor-top', `${Math.max(8, shouldDropUp ? buttonRect.top - gap : buttonRect.bottom + gap)}px`);
+        dropdown.style.setProperty('--dropdown-anchor-left', `${left}px`);
+        dropdown.style.setProperty('--dropdown-trigger-width', `${Math.ceil(buttonRect.width)}px`);
+        return true;
+    } catch (error) {
+        console.error('账号菜单定位失败:', error);
+        showMoreMenuPositionError('账号菜单定位失败，已回退为默认位置');
+        resetMoreMenuPosition(menu, dropdown);
+        return false;
+    }
+}
+
+// 更多菜单切换
+function toggleMoreMenu(event, btn) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+
+    const menu = btn?.nextElementSibling;
+    if (!menu || !menu.classList.contains('dropdown-menu')) {
+        showMoreMenuPositionError('账号菜单结构异常，无法打开更多操作');
+        return;
+    }
+
+    if (menu.classList.contains('active')) {
+        closeMoreMenu(null, menu);
+        return;
+    }
+
+    closeActiveMoreMenus(menu);
+    menu.style.visibility = 'hidden';
+    menu.classList.add('active');
+    const positioned = positionMoreMenu(btn, menu);
+    requestAnimationFrame(() => {
+        if (menu.classList.contains('active') && positioned !== false) {
+            menu.style.visibility = 'visible';
+        }
+    });
+}
+
+function closeMoreMenu(event, el) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+
+    const menu = el?.classList?.contains('dropdown-menu') ? el : el?.closest('.dropdown-menu');
+    if (!menu) {
+        return;
+    }
+
+    menu.classList.remove('active');
+    resetMoreMenuPosition(menu);
 }
 
 // 保存账号 Cookies
@@ -1442,7 +1606,7 @@ async function handleCodexAuthLogin() {
     statusEl.textContent = '正在启动 Codex Auth 登录...';
     downloadBtn.style.display = 'none';
     codexAuthResults = [];
-    modal.classList.add('active');
+    setAccountsModalOpen(modal, true);
 
     if (count === 1 && !selectAllPages) {
         // 单账号登录

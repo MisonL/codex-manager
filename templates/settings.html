@@ -8,9 +8,9 @@
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v={{ static_version }}">
 </head>
 <body>
-    <div class="container">
-        <!-- 导航栏 -->
-        <nav class="navbar">
+    <!-- 导航栏 -->
+    <nav class="navbar">
+        <div class="container navbar-shell">
             <div class="nav-brand">
                 <h1>OpenAI 注册系统</h1>
             </div>
@@ -22,10 +22,13 @@
                 <a href="/settings" class="nav-link active">设置</a>
                 <a href="/logout" class="nav-link">退出</a>
             </div>
-            <button class="theme-toggle" onclick="theme.toggle()" title="切换主题">
-                🌙
-            </button>
-        </nav>
+            <div class="nav-meta">
+                <button class="theme-toggle" onclick="theme.toggle()" title="主题模式"></button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
 
         <!-- 主内容区 -->
         <main class="main-content">
@@ -55,30 +58,31 @@
                     </div>
                     <div class="card-body">
                         <form id="dynamic-proxy-form">
+                            <input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;">
                             <div class="form-group">
-                                <label>
-                                    <input type="checkbox" id="dynamic-proxy-enabled" name="enabled">
-                                    启用动态代理
-                                </label>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="checkbox" id="dynamic-proxy-enabled" name="enabled" aria-label="启用动态代理">
+                                    <label for="dynamic-proxy-enabled" style="margin: 0;">启用动态代理</label>
+                                </div>
                             </div>
                             <div class="form-group">
                                 <label for="dynamic-proxy-api-url">代理 API 地址</label>
-                                <input type="text" id="dynamic-proxy-api-url" name="api_url" placeholder="http://api.example.com/get_proxy">
+                                <input type="text" id="dynamic-proxy-api-url" name="api_url" placeholder="http://api.example.com/get_proxy" aria-label="代理 API 地址" autocomplete="url">
                                 <small style="color: var(--text-muted);">每次注册任务启动时调用此 API 获取代理 URL</small>
                             </div>
                             <div class="form-row">
                                 <div class="form-group">
                                     <label for="dynamic-proxy-api-key">API 密钥 (可选)</label>
-                                    <input type="password" id="dynamic-proxy-api-key" name="api_key" placeholder="留空保持不变" autocomplete="new-password">
+                                    <input type="password" id="dynamic-proxy-api-key" name="api_key" placeholder="留空保持不变" aria-label="API 密钥" autocomplete="off">
                                 </div>
                                 <div class="form-group">
                                     <label for="dynamic-proxy-api-key-header">密钥请求头</label>
-                                    <input type="text" id="dynamic-proxy-api-key-header" name="api_key_header" value="X-API-Key">
+                                    <input type="text" id="dynamic-proxy-api-key-header" name="api_key_header" value="X-API-Key" aria-label="密钥请求头" autocomplete="off">
                                 </div>
                             </div>
                             <div class="form-group">
                                 <label for="dynamic-proxy-result-field">JSON 字段路径 (可选)</label>
-                                <input type="text" id="dynamic-proxy-result-field" name="result_field" placeholder="例如: data.proxy 或留空使用响应原文">
+                                <input type="text" id="dynamic-proxy-result-field" name="result_field" placeholder="例如: data.proxy 或留空使用响应原文" aria-label="JSON 字段路径" autocomplete="off">
                                 <small style="color: var(--text-muted);">若 API 返回 JSON，填写点号分隔的字段路径提取代理 URL；留空则将响应原文作为代理 URL</small>
                             </div>
                             <div class="form-actions">
@@ -141,9 +145,10 @@
                     </div>
                     <div class="card-body">
                         <form id="webui-settings-form">
+                            <input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;">
                             <div class="form-group">
                                 <label for="webui-access-password">访问密码</label>
-                                <input type="password" id="webui-access-password" name="access_password" placeholder="留空保持不变" autocomplete="new-password">
+                                <input type="password" id="webui-access-password" name="access_password" placeholder="留空保持不变" aria-label="访问密码" autocomplete="new-password">
                             </div>
                             <div class="form-actions">
                                 <button type="submit" class="btn btn-primary">💾 保存设置</button>
@@ -184,36 +189,37 @@ MyProxy|socks5://user:pass@host:port"></textarea>
                     </div>
                     <div class="modal-body">
                         <form id="proxy-item-form">
-                            <input type="hidden" id="proxy-item-id">
+                            <input type="hidden" id="proxy-item-id" name="proxy_id">
+                            <input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;">
                             <div class="form-group">
                                 <label for="proxy-item-name">名称</label>
-                                <input type="text" id="proxy-item-name" name="name" required placeholder="例如：美国代理 1">
+                                <input type="text" id="proxy-item-name" name="name" required placeholder="例如：美国代理 1" aria-label="代理名称" autocomplete="off">
                             </div>
                             <div class="form-row">
                                 <div class="form-group">
                                     <label for="proxy-item-type">类型</label>
-                                    <select id="proxy-item-type" name="type">
+                                    <select id="proxy-item-type" name="type" aria-label="代理类型">
                                         <option value="http">HTTP</option>
                                         <option value="socks5">SOCKS5</option>
                                     </select>
                                 </div>
                                 <div class="form-group">
                                     <label for="proxy-item-host">主机地址</label>
-                                    <input type="text" id="proxy-item-host" name="host" required placeholder="127.0.0.1">
+                                    <input type="text" id="proxy-item-host" name="host" required placeholder="127.0.0.1" aria-label="代理主机地址" autocomplete="off" spellcheck="false">
                                 </div>
                                 <div class="form-group">
                                     <label for="proxy-item-port">端口</label>
-                                    <input type="number" id="proxy-item-port" name="port" required placeholder="7890">
+                                    <input type="number" id="proxy-item-port" name="port" required placeholder="7890" aria-label="代理端口" autocomplete="off">
                                 </div>
                             </div>
                             <div class="form-row">
                                 <div class="form-group">
                                     <label for="proxy-item-username">用户名 (可选)</label>
-                                    <input type="text" id="proxy-item-username" name="username" autocomplete="off">
+                                    <input type="text" id="proxy-item-username" name="username" aria-label="代理用户名" autocomplete="off" spellcheck="false">
                                 </div>
                                 <div class="form-group">
                                     <label for="proxy-item-password">密码 (可选)</label>
-                                    <input type="password" id="proxy-item-password" name="password" autocomplete="new-password">
+                                    <input type="password" id="proxy-item-password" name="password" aria-label="代理密码" autocomplete="off">
                                 </div>
                             </div>
                             <div class="form-actions">
@@ -344,30 +350,32 @@ MyProxy|socks5://user:pass@host:port"></textarea>
                     </div>
                     <div class="modal-body">
                         <form id="tm-service-form">
-                            <input type="hidden" id="tm-service-id">
+                            <input type="hidden" id="tm-service-id" name="service_id">
+                            <input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;">
                             <div class="form-group">
                                 <label for="tm-service-name">名称 *</label>
-                                <input type="text" id="tm-service-name" placeholder="例如: 主服务" required>
+                                <input type="text" id="tm-service-name" name="name" placeholder="例如: 主服务" required aria-label="Team Manager 服务名称" autocomplete="off">
                             </div>
                             <div class="form-group">
                                 <label for="tm-service-url">API URL *</label>
-                                <input type="text" id="tm-service-url" placeholder="https://tm.example.com" required>
+                                <input type="text" id="tm-service-url" name="api_url" placeholder="https://tm.example.com" required aria-label="Team Manager API URL" autocomplete="url" spellcheck="false">
                             </div>
                             <div class="form-group">
                                 <label for="tm-service-key">API Key</label>
-                                <input type="password" id="tm-service-key" placeholder="编辑时留空则保持原值" autocomplete="new-password">
+                                <input type="password" id="tm-service-key" name="api_key" placeholder="编辑时留空则保持原值" aria-label="Team Manager API Key" autocomplete="off">
                             </div>
                             <div class="form-row">
                                 <div class="form-group">
                                     <label for="tm-service-priority">优先级</label>
-                                    <input type="number" id="tm-service-priority" value="0" min="0">
+                                    <input type="number" id="tm-service-priority" name="priority" value="0" min="0" aria-label="Team Manager 优先级" autocomplete="off">
                                     <p class="hint">数字越小优先级越高</p>
                                 </div>
                                 <div class="form-group">
-                                    <label>&nbsp;</label>
-                                    <label style="margin-top:10px;display:flex;align-items:center;gap:8px;">
-                                        <input type="checkbox" id="tm-service-enabled" checked> 启用
-                                    </label>
+                                    <div style="height: 22px;" aria-hidden="true"></div>
+                                    <div style="margin-top: 10px; display: flex; align-items: center; gap: 8px;">
+                                        <input type="checkbox" id="tm-service-enabled" name="enabled" checked aria-label="启用 Team Manager 服务">
+                                        <label for="tm-service-enabled" style="margin: 0;">启用</label>
+                                    </div>
                                 </div>
                             </div>
                             <div class="form-actions">
@@ -389,30 +397,32 @@ MyProxy|socks5://user:pass@host:port"></textarea>
                     </div>
                     <div class="modal-body">
                         <form id="sub2api-service-form">
-                            <input type="hidden" id="sub2api-service-id">
+                            <input type="hidden" id="sub2api-service-id" name="service_id">
+                            <input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;">
                             <div class="form-group">
                                 <label for="sub2api-service-name">名称 *</label>
-                                <input type="text" id="sub2api-service-name" placeholder="例如: 主服务" required>
+                                <input type="text" id="sub2api-service-name" name="name" placeholder="例如: 主服务" required aria-label="Sub2API 服务名称" autocomplete="off">
                             </div>
                             <div class="form-group">
                                 <label for="sub2api-service-url">API URL *</label>
-                                <input type="text" id="sub2api-service-url" placeholder="http://host" required>
+                                <input type="text" id="sub2api-service-url" name="api_url" placeholder="http://host" required aria-label="Sub2API API URL" autocomplete="url" spellcheck="false">
                             </div>
                             <div class="form-group">
                                 <label for="sub2api-service-key">API Key</label>
-                                <input type="password" id="sub2api-service-key" placeholder="编辑时留空则保持原值" autocomplete="new-password">
+                                <input type="password" id="sub2api-service-key" name="api_key" placeholder="编辑时留空则保持原值" aria-label="Sub2API API Key" autocomplete="off">
                             </div>
                             <div class="form-row">
                                 <div class="form-group">
                                     <label for="sub2api-service-priority">优先级</label>
-                                    <input type="number" id="sub2api-service-priority" value="0" min="0">
+                                    <input type="number" id="sub2api-service-priority" name="priority" value="0" min="0" aria-label="Sub2API 优先级" autocomplete="off">
                                     <p class="hint">数字越小优先级越高</p>
                                 </div>
                                 <div class="form-group">
-                                    <label>&nbsp;</label>
-                                    <label style="margin-top:10px;display:flex;align-items:center;gap:8px;">
-                                        <input type="checkbox" id="sub2api-service-enabled" checked> 启用
-                                    </label>
+                                    <div style="height: 22px;" aria-hidden="true"></div>
+                                    <div style="margin-top: 10px; display: flex; align-items: center; gap: 8px;">
+                                        <input type="checkbox" id="sub2api-service-enabled" name="enabled" checked aria-label="启用 Sub2API 服务">
+                                        <label for="sub2api-service-enabled" style="margin: 0;">启用</label>
+                                    </div>
                                 </div>
                             </div>
                             <div class="form-actions">
@@ -434,34 +444,37 @@ MyProxy|socks5://user:pass@host:port"></textarea>
                     </div>
                     <div class="modal-body">
                         <form id="cpa-service-form">
-                            <input type="hidden" id="cpa-service-id">
+                            <input type="hidden" id="cpa-service-id" name="service_id">
+                            <input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;">
                             <div class="form-group">
                                 <label for="cpa-service-name">名称 *</label>
-                                <input type="text" id="cpa-service-name" placeholder="例如: 主服务" required>
+                                <input type="text" id="cpa-service-name" name="name" placeholder="例如: 主服务" required aria-label="CPA 服务名称" autocomplete="off">
                             </div>
                             <div class="form-group">
                                 <label for="cpa-service-url">API URL *</label>
-                                <input type="text" id="cpa-service-url" placeholder="https://cpa.example.com" required>
+                                <input type="text" id="cpa-service-url" name="api_url" placeholder="https://cpa.example.com" required aria-label="CPA API URL" autocomplete="url" spellcheck="false">
                                 <p class="hint">支持填写根地址、`/v0/management` 或完整的 `/v0/management/auth-files` 地址</p>
                             </div>
                             <div class="form-group">
                                 <label for="cpa-service-token">API Token</label>
-                                <input type="password" id="cpa-service-token" placeholder="编辑时留空则保持原值" autocomplete="new-password">
+                                <input type="password" id="cpa-service-token" name="api_token" placeholder="编辑时留空则保持原值" aria-label="CPA API Token" autocomplete="off">
                             </div>
                             <div class="form-row">
                                 <div class="form-group">
                                     <label for="cpa-service-priority">优先级</label>
-                                    <input type="number" id="cpa-service-priority" value="0" min="0">
+                                    <input type="number" id="cpa-service-priority" name="priority" value="0" min="0" aria-label="CPA 优先级" autocomplete="off">
                                     <p class="hint">数字越小优先级越高</p>
                                 </div>
                                 <div class="form-group">
-                                    <label>&nbsp;</label>
-                                    <label style="margin-top:10px;display:flex;align-items:center;gap:8px;">
-                                        <input type="checkbox" id="cpa-service-enabled" checked> 启用
-                                    </label>
-                                    <label style="margin-top:10px;display:flex;align-items:center;gap:8px;">
-                                        <input type="checkbox" id="cpa-service-include-proxy-url"> 写入 auth file 的 <code>proxy_url</code>
-                                    </label>
+                                    <div style="height: 22px;" aria-hidden="true"></div>
+                                    <div style="margin-top: 10px; display: flex; align-items: center; gap: 8px;">
+                                        <input type="checkbox" id="cpa-service-enabled" name="enabled" checked aria-label="启用 CPA 服务">
+                                        <label for="cpa-service-enabled" style="margin: 0;">启用</label>
+                                    </div>
+                                    <div style="margin-top: 10px; display: flex; align-items: center; gap: 8px;">
+                                        <input type="checkbox" id="cpa-service-include-proxy-url" name="include_proxy_url" aria-label="写入 auth file 的 proxy_url">
+                                        <label for="cpa-service-include-proxy-url" style="margin: 0;">写入 auth file 的 <code>proxy_url</code></label>
+                                    </div>
                                     <p class="hint">开启后，若账号记录了实际使用代理（含动态代理），上传到 CPA 时会一并写入。</p>
                                 </div>
                             </div>
@@ -546,7 +559,7 @@ MyProxy|socks5://user:pass@host:port"></textarea>
                             <div class="form-group">
                                 <label for="outlook-default-client-id">默认 Client ID</label>
                                 <input type="text" id="outlook-default-client-id" name="default_client_id"
-                                    placeholder="24d9a0ed-8787-4584-883c-2fd79308940a">
+                                    placeholder="24d9a0ed-8787-4584-883c-2fd79308940a" aria-label="默认 Client ID" autocomplete="off" spellcheck="false">
                                 <p class="hint">Outlook OAuth 应用的 Client ID。导入账户时未填写 client_id 则使用此默认值。</p>
                             </div>
 
@@ -569,29 +582,29 @@ MyProxy|socks5://user:pass@host:port"></textarea>
                             <div class="form-row">
                                 <div class="form-group">
                                     <label for="max-retries">最大重试次数</label>
-                                    <input type="number" id="max-retries" name="max_retries" value="3" min="1" max="10">
+                                    <input type="number" id="max-retries" name="max_retries" value="3" min="1" max="10" aria-label="最大重试次数" autocomplete="off">
                                 </div>
 
                                 <div class="form-group">
                                     <label for="timeout">超时时间 (秒)</label>
-                                    <input type="number" id="timeout" name="timeout" value="120" min="30" max="600">
+                                    <input type="number" id="timeout" name="timeout" value="120" min="30" max="600" aria-label="超时时间" autocomplete="off">
                                 </div>
 
                                 <div class="form-group">
                                     <label for="password-length">密码长度</label>
-                                    <input type="number" id="password-length" name="default_password_length" value="12" min="8" max="32">
+                                    <input type="number" id="password-length" name="default_password_length" value="12" min="8" max="32" aria-label="密码长度" autocomplete="off">
                                 </div>
                             </div>
 
                             <div class="form-row">
                                 <div class="form-group">
                                     <label for="sleep-min">最小等待时间 (秒)</label>
-                                    <input type="number" id="sleep-min" name="sleep_min" value="5" min="1" max="60">
+                                    <input type="number" id="sleep-min" name="sleep_min" value="5" min="1" max="60" aria-label="最小等待时间" autocomplete="off">
                                 </div>
 
                                 <div class="form-group">
                                     <label for="sleep-max">最大等待时间 (秒)</label>
-                                    <input type="number" id="sleep-max" name="sleep_max" value="30" min="5" max="120">
+                                    <input type="number" id="sleep-max" name="sleep_max" value="30" min="5" max="120" aria-label="最大等待时间" autocomplete="off">
                                 </div>
                             </div>
 
@@ -615,13 +628,13 @@ MyProxy|socks5://user:pass@host:port"></textarea>
                             <div class="form-row">
                                 <div class="form-group">
                                     <label for="email-code-timeout">等待超时 (秒)</label>
-                                    <input type="number" id="email-code-timeout" name="timeout" value="120" min="30" max="600">
+                                    <input type="number" id="email-code-timeout" name="timeout" value="120" min="30" max="600" aria-label="等待超时" autocomplete="off">
                                     <span class="hint">等待验证码的最大时间，建议 60-300 秒</span>
                                 </div>
 
                                 <div class="form-group">
                                     <label for="email-code-poll-interval">轮询间隔 (秒)</label>
-                                    <input type="number" id="email-code-poll-interval" name="poll_interval" value="3" min="1" max="30">
+                                    <input type="number" id="email-code-poll-interval" name="poll_interval" value="3" min="1" max="30" aria-label="轮询间隔" autocomplete="off">
                                     <span class="hint">检查邮箱的时间间隔，建议 2-5 秒</span>
                                 </div>
                             </div>

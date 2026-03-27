@@ -598,6 +598,18 @@ async def delete_proxy_item(proxy_id: int):
         return {"success": True, "message": "代理已删除"}
 
 
+@router.delete("/proxies/disabled")
+async def delete_disabled_proxy_items():
+    """删除所有已禁用代理"""
+    with get_db() as db:
+        deleted_count = crud.delete_disabled_proxies(db)
+        return {
+            "success": True,
+            "deleted_count": deleted_count,
+            "message": f"已删除 {deleted_count} 个禁用代理",
+        }
+
+
 @router.post("/proxies/{proxy_id}/set-default")
 async def set_proxy_default(proxy_id: int):
     """将指定代理设为默认"""
