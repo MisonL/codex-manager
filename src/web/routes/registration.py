@@ -237,7 +237,7 @@ class RegistrationTaskCreate(BaseModel):
     proxy: Optional[str] = None
     email_service_config: Optional[dict] = None
     email_service_id: Optional[int] = None
-    auto_codex_auth: bool = False
+    auto_codex_auth: bool = True
     auto_upload_cpa: bool = False
     cpa_service_ids: List[int] = []  # 指定 CPA 服务 ID 列表，空则取第一个启用的
     auto_upload_sub2api: bool = False
@@ -259,7 +259,7 @@ class BatchRegistrationRequest(BaseModel):
     interval_max: int = 30
     concurrency: int = 1
     mode: str = "pipeline"
-    auto_codex_auth: bool = False
+    auto_codex_auth: bool = True
     auto_upload_cpa: bool = False
     cpa_service_ids: List[int] = []
     auto_upload_sub2api: bool = False
@@ -344,7 +344,7 @@ class OutlookBatchRegistrationRequest(BaseModel):
     interval_max: int = 30
     concurrency: int = 1
     mode: str = "pipeline"
-    auto_codex_auth: bool = False
+    auto_codex_auth: bool = True
     auto_upload_cpa: bool = False
     cpa_service_ids: List[int] = []
     auto_upload_sub2api: bool = False
@@ -671,7 +671,7 @@ def _build_email_service_candidates(
     return candidates
 
 
-def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_codex_auth: bool = False, auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None, auto_upload_newapi: bool = False, newapi_service_ids: List[int] = None):
+def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_codex_auth: bool = True, auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None, auto_upload_newapi: bool = False, newapi_service_ids: List[int] = None):
     """
     在线程池中执行的同步注册任务
 
@@ -1068,7 +1068,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 pass
 
 
-async def run_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_codex_auth: bool = False, auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None, auto_upload_newapi: bool = False, newapi_service_ids: List[int] = None):
+async def run_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_codex_auth: bool = True, auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None, auto_upload_newapi: bool = False, newapi_service_ids: List[int] = None):
     """
     异步执行注册任务
 
@@ -1404,7 +1404,7 @@ async def run_batch_parallel(
     email_service_config: Optional[dict],
     email_service_id: Optional[int],
     concurrency: int,
-    auto_codex_auth: bool = False,
+    auto_codex_auth: bool = True,
     auto_upload_cpa: bool = False,
     cpa_service_ids: List[int] = None,
     auto_upload_sub2api: bool = False,
@@ -1478,7 +1478,7 @@ async def run_batch_pipeline(
     interval_min: int,
     interval_max: int,
     concurrency: int,
-    auto_codex_auth: bool = False,
+    auto_codex_auth: bool = True,
     auto_upload_cpa: bool = False,
     cpa_service_ids: List[int] = None,
     auto_upload_sub2api: bool = False,
@@ -1545,7 +1545,7 @@ async def run_batch_pipeline(
             running_tasks_list.append(t)
 
             if i < len(task_uuids) - 1 and not task_manager.is_batch_cancelled(batch_id):
-                wait_time = random.randint(interval_min, interval_max)
+                wait_time = int(random.randint(interval_min, interval_max) * (1.1 ** i))
                 logger.info(f"批量任务 {batch_id}: 等待 {wait_time} 秒后启动下一个任务")
                 await asyncio.sleep(wait_time)
 
@@ -1576,7 +1576,7 @@ async def run_batch_registration(
     interval_max: int,
     concurrency: int = 1,
     mode: str = "pipeline",
-    auto_codex_auth: bool = False,
+    auto_codex_auth: bool = True,
     auto_upload_cpa: bool = False,
     cpa_service_ids: List[int] = None,
     auto_upload_sub2api: bool = False,
@@ -2205,7 +2205,7 @@ async def run_outlook_batch_registration(
     interval_max: int,
     concurrency: int = 1,
     mode: str = "pipeline",
-    auto_codex_auth: bool = False,
+    auto_codex_auth: bool = True,
     auto_upload_cpa: bool = False,
     cpa_service_ids: List[int] = None,
     auto_upload_sub2api: bool = False,

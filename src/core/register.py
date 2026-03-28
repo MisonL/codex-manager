@@ -17,6 +17,7 @@ from datetime import datetime
 from curl_cffi import requests as cffi_requests
 
 from .openai.oauth import OAuthManager, OAuthStart
+from .openai.sentinel import get_sentinel_p_token
 from .fingerprint import FingerprintProfile
 from .http_client import OpenAIHTTPClient, HTTPClientError
 from ..services import EmailServiceFactory, BaseEmailService, EmailServiceType
@@ -1246,6 +1247,10 @@ class RegistrationEngine:
                 self._log("未能获取到授权 Cookie", "error")
                 return None
 
+            if "add-phone" in response.url:
+                self._log("!!! 触发手机号风控 !!! OpenAI 要求绑定手机号才能继续。", "error")
+                # 标记为需要手机号，以便后续人工或接码平台处理
+                return False
             self._log("授权 Cookie 里没有 workspace 信息", "error")
             return None
 
@@ -1518,6 +1523,10 @@ class RegistrationEngine:
             self._emit_status("login_reentry", "重新进入登录流程")
             did = self._current_device_id()
             sen_token = self._check_sentinel(did) if did else None
+            self._log("CSE加固：显式模拟中间跳转以刷新 Session Cookies")
+            # 模拟访问 login 页面首页，确保获取 _cfuvid 等关键 Cloudflare Cookie
+            self.session.get("https://auth.openai.com/log-in", timeout=10)
+            time.sleep(random.uniform(0.5, 1.2))
             self._log("登录重入：请求 authorize 页面以确认当前表单状态")
             started_at = time.time()
             response = self._session_get(
@@ -2285,6 +2294,13 @@ class RegistrationEngine:
                     source=result.source
                 )
 
+                                # [CSE加固] 模仿 DestinyCycloid 的热度激活策略
+                self._log("正在进行注册后 Session 激活（热度注入）...")
+                try:
+                    self.session.get("https://chatgpt.com/backend-api/models", timeout=10)
+                    self._log("Session 激活成功，账号已进入活跃态。")
+                except:
+                    self._log("Session 激活跳过，不影响注册结果。", "warning")
                 self._log(f"账户已保存到数据库，ID: {account.id}")
                 return True
 
