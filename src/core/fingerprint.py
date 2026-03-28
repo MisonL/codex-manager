@@ -16,19 +16,19 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 
-DEFAULT_BROWSER_IMPERSONATE = "chrome120"
-DEFAULT_BROWSER_MAJOR_VERSION = "120"
-DEFAULT_BROWSER_FULL_VERSION = "120.0.0.0"
+DEFAULT_BROWSER_IMPERSONATE = "chrome124"
+DEFAULT_BROWSER_MAJOR_VERSION = "124"
+DEFAULT_BROWSER_FULL_VERSION = "124.0.0.0"
 DEFAULT_BROWSER_PLATFORM = "Windows"
 DEFAULT_BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 DEFAULT_SEC_CH_UA = (
-    '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"'
+    '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"'
 )
 DEFAULT_ACCEPT_LANGUAGE = "en-US,en;q=0.9"
-DEFAULT_ACCEPT_ENCODING = "gzip, deflate, br"
+DEFAULT_ACCEPT_ENCODING = "gzip, deflate, br, zstd"
 PROFILE_SCHEMA_VERSION = 1
 
 _PROFILE_LOCK = threading.Lock()
