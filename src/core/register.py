@@ -1,3 +1,4 @@
+import random
 """
 注册流程引擎
 从 main.py 中提取并重构的注册流程
@@ -664,7 +665,8 @@ class RegistrationEngine:
     def _start_oauth(self) -> bool:
         """开始 OAuth 流程"""
         try:
-            self._log("开始 OAuth 授权流程...")
+            time.sleep(random.uniform(1.2, 2.5))
+        self._log("开始 OAuth 授权流程...")
             self.oauth_start = self.oauth_manager.start_oauth()
             self._log(f"OAuth URL 已生成: {self.oauth_start.auth_url[:80]}...")
             return True
