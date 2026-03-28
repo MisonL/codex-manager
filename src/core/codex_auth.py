@@ -121,10 +121,35 @@ class CodexAuthEngine(RegistrationEngine):
     def _select_workspace_for_account(self, consent_workspace_id: Optional[str]) -> Optional[str]:
         return self.assigned_workspace_id or str(consent_workspace_id or "").strip() or None
 
-    def _session_get(self, url: str, **kwargs):
+    def _session_get(
+        self,
+        url: str,
+        *,
+        request_kind: str = "",
+        headers: Optional[Dict[str, str]] = None,
+        **kwargs,
+    ):
         if not self.session:
             raise RuntimeError("session not initialized")
-        return self.session.get(url, **kwargs)
+        request_kwargs = dict(kwargs)
+        if headers:
+            request_kwargs["headers"] = headers
+        return self.session.get(url, **request_kwargs)
+
+    def _session_post(
+        self,
+        url: str,
+        *,
+        request_kind: str = "",
+        headers: Optional[Dict[str, str]] = None,
+        **kwargs,
+    ):
+        if not self.session:
+            raise RuntimeError("session not initialized")
+        request_kwargs = dict(kwargs)
+        if headers:
+            request_kwargs["headers"] = headers
+        return self.session.post(url, **request_kwargs)
 
     def _resolve_workspace_id(self, consent_url: Optional[str]) -> Optional[str]:
         """
