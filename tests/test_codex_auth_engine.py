@@ -63,3 +63,58 @@ def test_resolve_workspace_authorization_injects_assigned_workspace(monkeypatch)
     assert phase_result.success is True
     assert chosen_workspace["workspace_id"] == "ws-assigned"
     assert phase_result.metadata["assigned_workspace_id"] == "ws-assigned"
+
+
+def test_codex_auth_session_helpers_ignore_request_kind(monkeypatch):
+    engine = _build_engine(monkeypatch)
+
+    class SessionDouble:
+        def __init__(self):
+            self.get_calls = []
+            self.post_calls = []
+
+        def get(self, url, **kwargs):
+            self.get_calls.append({"url": url, "kwargs": kwargs})
+            return "get-ok"
+
+        def post(self, url, **kwargs):
+            self.post_calls.append({"url": url, "kwargs": kwargs})
+            return "post-ok"
+
+    engine.session = SessionDouble()
+
+    get_result = engine._session_get(
+        "https://auth.example.test/authorize",
+        request_kind="navigate",
+        headers={"referer": "https://auth.example.test"},
+        timeout=20,
+    )
+    post_result = engine._session_post(
+        "https://auth.example.test/continue",
+        request_kind="api",
+        headers={"content-type": "application/json"},
+        data="{}",
+        timeout=15,
+    )
+
+    assert get_result == "get-ok"
+    assert post_result == "post-ok"
+    assert engine.session.get_calls == [
+        {
+            "url": "https://auth.example.test/authorize",
+            "kwargs": {
+                "headers": {"referer": "https://auth.example.test"},
+                "timeout": 20,
+            },
+        }
+    ]
+    assert engine.session.post_calls == [
+        {
+            "url": "https://auth.example.test/continue",
+            "kwargs": {
+                "headers": {"content-type": "application/json"},
+                "data": "{}",
+                "timeout": 15,
+            },
+        }
+    ]
