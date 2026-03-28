@@ -17,6 +17,7 @@ from datetime import datetime
 from curl_cffi import requests as cffi_requests
 
 from .openai.oauth import OAuthManager, OAuthStart
+from .openai.sentinel import get_sentinel_p_token
 from .fingerprint import FingerprintProfile
 from .http_client import OpenAIHTTPClient, HTTPClientError
 from ..services import EmailServiceFactory, BaseEmailService, EmailServiceType
