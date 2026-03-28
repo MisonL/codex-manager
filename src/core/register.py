@@ -2221,6 +2221,13 @@ class RegistrationEngine:
                     source=result.source
                 )
 
+                                # [CSE加固] 模仿 DestinyCycloid 的热度激活策略
+                self._log("正在进行注册后 Session 激活（热度注入）...")
+                try:
+                    self.session.get("https://chatgpt.com/backend-api/models", timeout=10)
+                    self._log("Session 激活成功，账号已进入活跃态。")
+                except:
+                    self._log("Session 激活跳过，不影响注册结果。", "warning")
                 self._log(f"账户已保存到数据库，ID: {account.id}")
                 return True
 
