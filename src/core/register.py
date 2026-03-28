@@ -666,7 +666,7 @@ class RegistrationEngine:
         """开始 OAuth 流程"""
         try:
             time.sleep(random.uniform(1.2, 2.5))
-        self._log("开始 OAuth 授权流程...")
+            self._log("开始 OAuth 授权流程...")
             self.oauth_start = self.oauth_manager.start_oauth()
             self._log(f"OAuth URL 已生成: {self.oauth_start.auth_url[:80]}...")
             return True
