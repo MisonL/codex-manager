@@ -1213,6 +1213,10 @@ class RegistrationEngine:
                 self._log("未能获取到授权 Cookie", "error")
                 return None
 
+            if "add-phone" in response.url:
+                self._log("!!! 触发手机号风控 !!! OpenAI 要求绑定手机号才能继续。", "error")
+                # 标记为需要手机号，以便后续人工或接码平台处理
+                return False
             self._log("授权 Cookie 里没有 workspace 信息", "error")
             return None
 
