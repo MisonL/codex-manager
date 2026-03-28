@@ -1539,7 +1539,7 @@ async def run_batch_pipeline(
             running_tasks_list.append(t)
 
             if i < len(task_uuids) - 1 and not task_manager.is_batch_cancelled(batch_id):
-                wait_time = random.randint(interval_min, interval_max)
+                wait_time = int(random.randint(interval_min, interval_max) * (1.1 ** i))
                 logger.info(f"批量任务 {batch_id}: 等待 {wait_time} 秒后启动下一个任务")
                 await asyncio.sleep(wait_time)
 
