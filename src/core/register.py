@@ -478,9 +478,16 @@ class RegistrationEngine:
             signup_body = f'{{"username":{{"value":"{self.email}","kind":"email"}},"screen_hint":"signup"}}'
 
             headers = {
+                "origin": "https://auth.openai.com",
                 "referer": "https://auth.openai.com/create-account",
                 "accept": "application/json",
                 "content-type": "application/json",
+                "Sec-CH-UA": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                "Sec-CH-UA-Mobile": "?0",
+                "Sec-CH-UA-Platform": '"Windows"',
+                "Sec-Fetch-Dest": "empty",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Site": "same-origin",
             }
 
             if sen_token:
