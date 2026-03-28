@@ -141,10 +141,16 @@ async function loadServiceSelect(apiPath, container, checkbox, selectGroup) {
     if (!checkbox || !container) return;
     let services = [];
     try {
+        console.log('[API] Fetching services from:', apiPath);
         services = await api.get(apiPath);
-    } catch (e) {}
+        console.log('[API] Services received:', services);
+    } catch (e) {
+        console.error('[API] Fetch failed for:', apiPath, e);
+    }
 
     if (!services || services.length === 0) {
+        console.warn('[UI] No available services for:', apiPath);
+        if (checkbox) checkbox.disabled = true;
         checkbox.disabled = true;
         checkbox.title = '请先在设置中添加对应服务';
         const label = checkbox.closest('label');
